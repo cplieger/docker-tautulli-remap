@@ -1,0 +1,28 @@
+services:
+  tautulli-remap:
+    image: ghcr.io/cplieger/tautulli-remap:latest
+    container_name: tautulli-remap
+    restart: unless-stopped
+    user: "1000:1000"  # match your host user
+    mem_limit: 128m
+
+    environment:
+      TZ: "Europe/Paris"
+      TAUTULLI_URL: "http://tautulli:8181"
+      TAUTULLI_APIKEY: "your-tautulli-apikey"
+      PLEX_URL: "http://plex:32400"
+      PLEX_TOKEN: "your-plex-token"
+      SCHEDULE_HOURS: "24"  # 0 = run once and exit
+      FALLBACK_TITLE_YEAR: "true"
+      FALLBACK_TITLE_ONLY: "false"  # risk of false matches
+      DRY_RUN: "true"  # set to false to apply changes
+
+    healthcheck:
+      test:
+        - CMD
+        - /tautulli-remap
+        - health
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
