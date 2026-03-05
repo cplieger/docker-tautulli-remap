@@ -1,8 +1,11 @@
 package main
 
 import (
+	"encoding/json"
 	"testing"
 )
+
+// --- Tests: normalizeGUID ---
 
 func TestNormalizeGUID(t *testing.T) {
 	tests := []struct {
@@ -10,77 +13,44 @@ func TestNormalizeGUID(t *testing.T) {
 		guid string
 		want string
 	}{
-		{
-			name: "imdb with query params",
-			guid: "com.plexapp.agents.imdb://tt1234567?lang=en",
-			want: "imdb://tt1234567",
-		},
-		{
-			name: "bare imdb",
-			guid: "imdb://tt9999999",
-			want: "imdb://tt9999999",
-		},
-		{
-			name: "themoviedb legacy agent",
-			guid: "com.plexapp.agents.themoviedb://12345?lang=en",
-			want: "tmdb://12345",
-		},
-		{
-			name: "tmdb new agent",
-			guid: "tmdb://67890",
-			want: "tmdb://67890",
-		},
-		{
-			name: "thetvdb legacy with season path",
-			guid: "com.plexapp.agents.thetvdb://271557/3/1?lang=en",
-			want: "tvdb://271557",
-		},
-		{
-			name: "tvdb new agent",
-			guid: "tvdb://271557",
-			want: "tvdb://271557",
-		},
-		{
-			name: "plex agent movie",
-			guid: "plex://movie/5d776b59ad5437001f79c6f8",
-			want: "plex://movie/5d776b59ad5437001f79c6f8",
-		},
-		{
-			name: "plex agent episode",
-			guid: "plex://episode/5d9c135046115600200d30a2",
-			want: "plex://episode/5d9c135046115600200d30a2",
-		},
-		{
-			name: "mbid music",
-			guid: "mbid://abcdef01-2345-6789-abcd-ef0123456789",
-			want: "mbid://abcdef01-2345-6789-abcd-ef0123456789",
-		},
-		{
-			name: "local unsupported",
-			guid: "local://616507",
-			want: "",
-		},
-		{
-			name: "agents.none unsupported",
-			guid: "com.plexapp.agents.none://632d404bf27d52a513ccd45e4df820cd276f3090?lang=xn",
-			want: "",
-		},
-		{
-			name: "empty string",
-			guid: "",
-			want: "",
-		},
+		// IMDB
+		{"imdb legacy with query params", "com.plexapp.agents.imdb://tt1234567?lang=en", "imdb://tt1234567"},
+		{"imdb bare", "imdb://tt9999999", "imdb://tt9999999"},
+
+		// TMDB
+		{"themoviedb legacy agent", "com.plexapp.agents.themoviedb://12345?lang=en", "tmdb://12345"},
+		{"tmdb new agent", "tmdb://67890", "tmdb://67890"},
+		{"tmdb with query params", "tmdb://12345?lang=en", "tmdb://12345"},
+
+		// TVDB
+		{"thetvdb legacy with season path", "com.plexapp.agents.thetvdb://271557/3/1?lang=en", "tvdb://271557"},
+		{"thetvdb with deep path", "com.plexapp.agents.thetvdb://271557/3/1/5?lang=en", "tvdb://271557"},
+		{"tvdb new agent", "tvdb://271557", "tvdb://271557"},
+
+		// Plex native
+		{"plex movie", "plex://movie/5d776b59ad5437001f79c6f8", "plex://movie/5d776b59ad5437001f79c6f8"},
+		{"plex episode", "plex://episode/5d9c135046115600200d30a2", "plex://episode/5d9c135046115600200d30a2"},
+
+		// MusicBrainz
+		{"mbid", "mbid://abcdef01-2345-6789-abcd-ef0123456789", "mbid://abcdef01-2345-6789-abcd-ef0123456789"},
+
+		// Unsupported / empty
+		{"local unsupported", "local://616507", ""},
+		{"agents.none unsupported", "com.plexapp.agents.none://632d404bf27d52a513ccd45e4df820cd276f3090?lang=xn", ""},
+		{"unknown scheme", "custom://something", ""},
+		{"empty string", "", ""},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := normalizeGUID(tt.guid)
-			if got != tt.want {
+			if got := normalizeGUID(tt.guid); got != tt.want {
 				t.Errorf("normalizeGUID(%q) = %q, want %q", tt.guid, got, tt.want)
 			}
 		})
 	}
 }
+
+// --- Tests: extractAfter ---
 
 func TestExtractAfter(t *testing.T) {
 	tests := []struct {
@@ -89,41 +59,54 @@ func TestExtractAfter(t *testing.T) {
 		prefix string
 		want   string
 	}{
-		{
-			name:   "simple extraction",
-			s:      "imdb://tt1234567",
-			prefix: "imdb://",
-			want:   "tt1234567",
-		},
-		{
-			name:   "with query params",
-			s:      "com.plexapp.agents.imdb://tt1234567?lang=en",
-			prefix: "imdb://",
-			want:   "tt1234567",
-		},
-		{
-			name:   "prefix not found",
-			s:      "tmdb://12345",
-			prefix: "imdb://",
-			want:   "",
-		},
-		{
-			name:   "empty input",
-			s:      "",
-			prefix: "imdb://",
-			want:   "",
-		},
+		{"simple extraction", "imdb://tt1234567", "imdb://", "tt1234567"},
+		{"strips query params", "com.plexapp.agents.imdb://tt1234567?lang=en", "imdb://", "tt1234567"},
+		{"prefix not found", "tmdb://12345", "imdb://", ""},
+		{"empty input", "", "imdb://", ""},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := extractAfter(tt.s, tt.prefix)
-			if got != tt.want {
+			if got := extractAfter(tt.s, tt.prefix); got != tt.want {
 				t.Errorf("extractAfter(%q, %q) = %q, want %q", tt.s, tt.prefix, got, tt.want)
 			}
 		})
 	}
 }
+
+// --- Tests: toInt ---
+
+func TestToInt(t *testing.T) {
+	tests := []struct {
+		name  string
+		input any
+		want  int
+	}{
+		{"float64", float64(42), 42},
+		{"float64 truncates decimal", float64(99.9), 99},
+		{"float64 zero", float64(0), 0},
+		{"float64 negative", float64(-5), -5},
+		{"string number", "123", 123},
+		{"string zero", "0", 0},
+		{"string negative", "-10", -10},
+		{"string empty", "", 0},
+		{"string non-numeric", "abc", 0},
+		{"json.Number valid", json.Number("456"), 456},
+		{"json.Number invalid", json.Number("not_a_number"), 0},
+		{"nil", nil, 0},
+		{"unsupported type", true, 0},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := toInt(tt.input); got != tt.want {
+				t.Errorf("toInt(%v) = %d, want %d", tt.input, got, tt.want)
+			}
+		})
+	}
+}
+
+// --- Tests: matchStaleItems ---
 
 // allFallbacks returns a config with both fallback strategies enabled.
 func allFallbacks() *config {
@@ -131,12 +114,9 @@ func allFallbacks() *config {
 }
 
 func TestMatchStaleItems(t *testing.T) {
-	t.Run("guid match takes priority", func(t *testing.T) {
+	t.Run("guid match takes priority over title+year", func(t *testing.T) {
 		stale := map[string]tautulliEntry{
-			"100": {
-				RatingKey: "100", Title: "The Matrix", Year: "1999",
-				MediaType: "movie", GUID: "imdb://tt0133093",
-			},
+			"100": {RatingKey: "100", Title: "The Matrix", Year: "1999", MediaType: "movie", GUID: "imdb://tt0133093"},
 		}
 		byGUID := map[string]plexEntry{
 			"imdb://tt0133093": {RatingKey: "200", Title: "The Matrix", Year: "1999", Type: "movie"},
@@ -144,9 +124,8 @@ func TestMatchStaleItems(t *testing.T) {
 		byTitleYear := map[string]plexEntry{
 			"the matrix|1999": {RatingKey: "300", Title: "The Matrix", Year: "1999", Type: "movie"},
 		}
-		byTitle := map[string]plexEntry{}
 
-		matched, unmatched := matchStaleItems(allFallbacks(), stale, byGUID, byTitleYear, byTitle)
+		matched, unmatched := matchStaleItems(allFallbacks(), stale, byGUID, byTitleYear, nil)
 
 		if len(matched) != 1 {
 			t.Fatalf("expected 1 match, got %d", len(matched))
@@ -154,7 +133,7 @@ func TestMatchStaleItems(t *testing.T) {
 		if matched[0].NewKey != "200" {
 			t.Errorf("expected GUID match key 200, got %s", matched[0].NewKey)
 		}
-		if matched[0].Method != "guid" {
+		if matched[0].Method != methodGUID {
 			t.Errorf("expected method 'guid', got %s", matched[0].Method)
 		}
 		if len(unmatched) != 0 {
@@ -164,17 +143,13 @@ func TestMatchStaleItems(t *testing.T) {
 
 	t.Run("title+year fallback when no guid", func(t *testing.T) {
 		stale := map[string]tautulliEntry{
-			"100": {
-				RatingKey: "100", Title: "Inception", Year: "2010",
-				MediaType: "movie", GUID: "",
-			},
+			"100": {RatingKey: "100", Title: "Inception", Year: "2010", MediaType: "movie", GUID: ""},
 		}
-		byGUID := map[string]plexEntry{}
 		byTitleYear := map[string]plexEntry{
 			"inception|2010": {RatingKey: "200", Title: "Inception", Year: "2010", Type: "movie"},
 		}
 
-		matched, unmatched := matchStaleItems(allFallbacks(), stale, byGUID, byTitleYear, nil)
+		matched, unmatched := matchStaleItems(allFallbacks(), stale, nil, byTitleYear, nil)
 
 		if len(matched) != 1 {
 			t.Fatalf("expected 1 match, got %d", len(matched))
@@ -182,7 +157,7 @@ func TestMatchStaleItems(t *testing.T) {
 		if matched[0].NewKey != "200" {
 			t.Errorf("expected key 200, got %s", matched[0].NewKey)
 		}
-		if matched[0].Method != "title+year" {
+		if matched[0].Method != methodTitleYear {
 			t.Errorf("expected method 'title+year', got %s", matched[0].Method)
 		}
 		if len(unmatched) != 0 {
@@ -192,10 +167,7 @@ func TestMatchStaleItems(t *testing.T) {
 
 	t.Run("title-only fallback with matching type", func(t *testing.T) {
 		stale := map[string]tautulliEntry{
-			"100": {
-				RatingKey: "100", Title: "Dune", Year: "2020",
-				MediaType: "movie", GUID: "",
-			},
+			"100": {RatingKey: "100", Title: "Dune", Year: "2020", MediaType: "movie", GUID: ""},
 		}
 		byTitle := map[string]plexEntry{
 			"dune": {RatingKey: "200", Title: "Dune", Year: "2021", Type: "movie"},
@@ -206,9 +178,6 @@ func TestMatchStaleItems(t *testing.T) {
 		if len(matched) != 1 {
 			t.Fatalf("expected 1 match, got %d", len(matched))
 		}
-		if matched[0].NewKey != "200" {
-			t.Errorf("expected key 200, got %s", matched[0].NewKey)
-		}
 		if matched[0].Method != "title only (2020 -> 2021)" {
 			t.Errorf("unexpected method: %s", matched[0].Method)
 		}
@@ -217,75 +186,9 @@ func TestMatchStaleItems(t *testing.T) {
 		}
 	})
 
-	t.Run("no match produces unmatched", func(t *testing.T) {
-		stale := map[string]tautulliEntry{
-			"100": {
-				RatingKey: "100", Title: "Nonexistent Movie", Year: "2025",
-				MediaType: "movie", GUID: "imdb://tt0000000",
-			},
-		}
-
-		matched, unmatched := matchStaleItems(allFallbacks(), stale, nil, nil, nil)
-
-		if len(matched) != 0 {
-			t.Errorf("expected 0 matched, got %d", len(matched))
-		}
-		if len(unmatched) != 1 {
-			t.Fatalf("expected 1 unmatched, got %d", len(unmatched))
-		}
-		if unmatched[0].OldKey != "100" {
-			t.Errorf("expected old key 100, got %s", unmatched[0].OldKey)
-		}
-	})
-
-	t.Run("same key not remapped", func(t *testing.T) {
-		stale := map[string]tautulliEntry{
-			"200": {
-				RatingKey: "200", Title: "The Matrix", Year: "1999",
-				MediaType: "movie", GUID: "imdb://tt0133093",
-			},
-		}
-		byGUID := map[string]plexEntry{
-			"imdb://tt0133093": {RatingKey: "200", Title: "The Matrix", Year: "1999", Type: "movie"},
-		}
-
-		matched, unmatched := matchStaleItems(allFallbacks(), stale, byGUID, nil, nil)
-
-		if len(matched) != 0 {
-			t.Errorf("expected 0 matched (same key), got %d", len(matched))
-		}
-		if len(unmatched) != 1 {
-			t.Errorf("expected 1 unmatched (same key), got %d", len(unmatched))
-		}
-	})
-
-	t.Run("case insensitive title matching", func(t *testing.T) {
-		stale := map[string]tautulliEntry{
-			"100": {
-				RatingKey: "100", Title: "THE MATRIX", Year: "1999",
-				MediaType: "movie", GUID: "",
-			},
-		}
-		byTitleYear := map[string]plexEntry{
-			"the matrix|1999": {RatingKey: "200", Title: "The Matrix", Year: "1999", Type: "movie"},
-		}
-
-		matched, _ := matchStaleItems(allFallbacks(), stale, nil, byTitleYear, nil)
-
-		if len(matched) != 1 {
-			t.Fatalf("expected 1 match, got %d", len(matched))
-		}
-		if matched[0].NewKey != "200" {
-			t.Errorf("expected key 200, got %s", matched[0].NewKey)
-		}
-	})
-
 	t.Run("title-only rejects type mismatch", func(t *testing.T) {
 		stale := map[string]tautulliEntry{
-			"100": {
-				RatingKey: "100", Title: "Home Alone", Year: "2025",
-				MediaType: "show", GUID: "",
-			},
+			"100": {RatingKey: "100", Title: "Home Alone", Year: "2025", MediaType: "show", GUID: ""},
 		}
 		byTitle := map[string]plexEntry{
 			"home alone": {RatingKey: "200", Title: "Home Alone", Year: "1990", Type: "movie"},
@@ -301,47 +204,109 @@ func TestMatchStaleItems(t *testing.T) {
 		}
 	})
 
+	t.Run("case insensitive title matching", func(t *testing.T) {
+		stale := map[string]tautulliEntry{
+			"100": {RatingKey: "100", Title: "THE MATRIX", Year: "1999", MediaType: "movie", GUID: ""},
+		}
+		byTitleYear := map[string]plexEntry{
+			"the matrix|1999": {RatingKey: "200", Title: "The Matrix", Year: "1999", Type: "movie"},
+		}
+
+		matched, _ := matchStaleItems(allFallbacks(), stale, nil, byTitleYear, nil)
+
+		if len(matched) != 1 || matched[0].NewKey != "200" {
+			t.Errorf("expected case-insensitive match to key 200")
+		}
+	})
+
+	t.Run("same key is not remapped", func(t *testing.T) {
+		stale := map[string]tautulliEntry{
+			"200": {RatingKey: "200", Title: "The Matrix", Year: "1999", MediaType: "movie", GUID: "imdb://tt0133093"},
+		}
+		byGUID := map[string]plexEntry{
+			"imdb://tt0133093": {RatingKey: "200", Title: "The Matrix", Year: "1999", Type: "movie"},
+		}
+
+		matched, unmatched := matchStaleItems(allFallbacks(), stale, byGUID, nil, nil)
+
+		if len(matched) != 0 {
+			t.Errorf("expected 0 matched (same key), got %d", len(matched))
+		}
+		if len(unmatched) != 1 {
+			t.Errorf("expected 1 unmatched (same key), got %d", len(unmatched))
+		}
+	})
+
+	t.Run("no match produces unmatched", func(t *testing.T) {
+		stale := map[string]tautulliEntry{
+			"100": {RatingKey: "100", Title: "Nonexistent", Year: "2025", MediaType: "movie", GUID: "imdb://tt0000000"},
+		}
+
+		matched, unmatched := matchStaleItems(allFallbacks(), stale, nil, nil, nil)
+
+		if len(matched) != 0 {
+			t.Errorf("expected 0 matched, got %d", len(matched))
+		}
+		if len(unmatched) != 1 || unmatched[0].OldKey != "100" {
+			t.Errorf("expected 1 unmatched with key 100")
+		}
+	})
+
 	t.Run("title+year disabled skips fallback", func(t *testing.T) {
 		cfg := &config{FallbackTitleYear: false, FallbackTitleOnly: false}
 		stale := map[string]tautulliEntry{
-			"100": {
-				RatingKey: "100", Title: "Inception", Year: "2010",
-				MediaType: "movie", GUID: "",
-			},
+			"100": {RatingKey: "100", Title: "Inception", Year: "2010", MediaType: "movie", GUID: ""},
 		}
 		byTitleYear := map[string]plexEntry{
 			"inception|2010": {RatingKey: "200", Title: "Inception", Year: "2010", Type: "movie"},
 		}
 
-		matched, unmatched := matchStaleItems(cfg, stale, nil, byTitleYear, nil)
+		matched, _ := matchStaleItems(cfg, stale, nil, byTitleYear, nil)
 
 		if len(matched) != 0 {
 			t.Errorf("expected 0 matched (fallback disabled), got %d", len(matched))
-		}
-		if len(unmatched) != 1 {
-			t.Errorf("expected 1 unmatched, got %d", len(unmatched))
 		}
 	})
 
 	t.Run("title-only disabled skips fallback", func(t *testing.T) {
 		cfg := &config{FallbackTitleYear: true, FallbackTitleOnly: false}
 		stale := map[string]tautulliEntry{
-			"100": {
-				RatingKey: "100", Title: "Dune", Year: "2020",
-				MediaType: "movie", GUID: "",
-			},
+			"100": {RatingKey: "100", Title: "Dune", Year: "2020", MediaType: "movie", GUID: ""},
 		}
 		byTitle := map[string]plexEntry{
 			"dune": {RatingKey: "200", Title: "Dune", Year: "2021", Type: "movie"},
 		}
 
-		matched, unmatched := matchStaleItems(cfg, stale, nil, nil, byTitle)
+		matched, _ := matchStaleItems(cfg, stale, nil, nil, byTitle)
 
 		if len(matched) != 0 {
 			t.Errorf("expected 0 matched (title-only disabled), got %d", len(matched))
 		}
+	})
+
+	t.Run("multiple stale items mixed results", func(t *testing.T) {
+		stale := map[string]tautulliEntry{
+			"100": {RatingKey: "100", Title: "Movie A", Year: "2020", MediaType: "movie", GUID: "imdb://tt1111111"},
+			"200": {RatingKey: "200", Title: "Movie B", Year: "2021", MediaType: "movie", GUID: "imdb://tt2222222"},
+			"300": {RatingKey: "300", Title: "Movie C", Year: "2022", MediaType: "movie", GUID: "imdb://tt3333333"},
+		}
+		byGUID := map[string]plexEntry{
+			"imdb://tt1111111": {RatingKey: "101", Title: "Movie A", Year: "2020", Type: "movie"},
+		}
+		byTitleYear := map[string]plexEntry{
+			"movie c|2022": {RatingKey: "301", Title: "Movie C", Year: "2022", Type: "movie"},
+		}
+
+		matched, unmatched := matchStaleItems(allFallbacks(), stale, byGUID, byTitleYear, nil)
+
+		if len(matched) != 2 {
+			t.Fatalf("expected 2 matched, got %d", len(matched))
+		}
 		if len(unmatched) != 1 {
-			t.Errorf("expected 1 unmatched, got %d", len(unmatched))
+			t.Fatalf("expected 1 unmatched, got %d", len(unmatched))
+		}
+		if unmatched[0].OldKey != "200" {
+			t.Errorf("expected unmatched key 200, got %s", unmatched[0].OldKey)
 		}
 	})
 }

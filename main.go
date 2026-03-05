@@ -29,6 +29,12 @@ import (
 
 const resultSuccess = "success"
 
+// Match method identifiers used in matchStaleItems results.
+const (
+	methodGUID      = "guid"
+	methodTitleYear = "title+year"
+)
+
 // healthFile is touched on startup and removed on shutdown.
 // The "health" subcommand checks its existence for Docker healthchecks
 // without requiring an HTTP server or open port.
@@ -403,7 +409,7 @@ func matchStaleItems(
 		if item.GUID != "" {
 			if pe, ok := byGUID[item.GUID]; ok && pe.RatingKey != oldKey {
 				newKey = pe.RatingKey
-				method = "guid"
+				method = methodGUID
 			}
 		}
 
@@ -412,7 +418,7 @@ func matchStaleItems(
 			t := strings.ToLower(strings.TrimSpace(item.Title))
 			if pe, ok := byTitleYear[t+"|"+item.Year]; ok && pe.RatingKey != oldKey {
 				newKey = pe.RatingKey
-				method = "title+year"
+				method = methodTitleYear
 			}
 		}
 

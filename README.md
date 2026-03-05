@@ -82,11 +82,17 @@ services:
 
 ## Deployment
 
-1. Set `TAUTULLI_URL` and `PLEX_URL` to your instances (Docker DNS names like `http://tautulli:8181` work if on the same network).
-2. Set `TAUTULLI_APIKEY` (found in Tautulli → Settings → Web Interface → API Key) and `PLEX_TOKEN` (see [Plex support](https://support.plex.tv/articles/204059436-finding-an-authentication-token-x-plex-token/)).
-3. Start with `DRY_RUN: "true"` (the default) to see what would change without applying anything. Check the container logs.
+1. Set `TAUTULLI_URL` and `PLEX_URL` to your instances (Docker DNS
+   names like `http://tautulli:8181` work if on the same network).
+2. Set `TAUTULLI_APIKEY` (found in Tautulli → Settings → Web
+   Interface → API Key) and `PLEX_TOKEN`
+   (see [Plex support](https://support.plex.tv/articles/204059436)).
+3. Start with `DRY_RUN: "true"` (the default) to see what would
+   change without applying anything. Check the container logs.
 4. Once satisfied, set `DRY_RUN: "false"` to apply the remaps.
-5. `FALLBACK_TITLE_YEAR` and `FALLBACK_TITLE_ONLY` control how aggressively the tool matches when GUID matching fails. Title-only matching risks false positives on common titles.
+5. `FALLBACK_TITLE_YEAR` and `FALLBACK_TITLE_ONLY` control how
+   aggressively the tool matches when GUID matching fails.
+   Title-only matching risks false positives on common titles.
 
 For additional configuration options not covered by this image's environment variables, refer to the [Tautulli documentation](https://github.com/Tautulli/Tautulli/wiki/Tautulli-API-Reference).
 
@@ -147,8 +153,14 @@ All dependencies are updated automatically via [Renovate](https://github.com/ren
 
 ## Design Principles
 
-- **Always up to date**: Base images, packages, and libraries are updated automatically via Renovate. Unlike many community Docker images that ship outdated or abandoned dependencies, these images receive continuous updates.
-- **Minimal attack surface**: When possible, pure Go apps use `gcr.io/distroless/static:nonroot` (no shell, no package manager, runs as non-root). Apps requiring system packages use Alpine with the minimum necessary privileges.
+- **Always up to date**: Base images, packages, and libraries are
+  updated automatically via Renovate. Unlike many community Docker
+  images that ship outdated or abandoned dependencies, these images
+  receive continuous updates.
+- **Minimal attack surface**: When possible, pure Go apps use
+  `gcr.io/distroless/static:nonroot` (no shell, no package manager,
+  runs as non-root). Apps requiring system packages use Alpine with
+  the minimum necessary privileges.
 - **Digest-pinned**: Every `FROM` instruction pins a SHA256 digest. All GitHub Actions are digest-pinned.
 - **Multi-platform**: Built for `linux/amd64` and `linux/arm64`.
 - **Healthchecks**: Every container includes a Docker healthcheck.
@@ -160,14 +172,24 @@ Issues, suggestions, and pull requests are welcome.
 
 ## Credits
 
-This is an original tool that integrates with [Tautulli](https://github.com/Tautulli/Tautulli). Thanks to the Tautulli maintainers for building the platform this tool extends.
+This is an original tool that integrates with
+[Tautulli](https://github.com/Tautulli/Tautulli). Thanks to the
+Tautulli maintainers for building the platform
+this tool extends.
 Inspired by [SwiftPanda16's Tautulli rating key update script](https://gist.github.com/JonnyWong16/f554f407832076919dc6864a78432db2).
 
 ## Disclaimer
 
-These images are built with care and follow security best practices, but they are intended for **homelab use**. No guarantees of fitness for production environments. Use at your own risk.
+These images are built with care and follow security best
+practices, but they are intended for **homelab use**. No
+guarantees of fitness for production environments. Use at
+your own risk.
 
-This project was built with AI-assisted tooling using [Claude Opus](https://www.anthropic.com/claude) and [Kiro](https://kiro.dev). The human maintainer defines architecture, supervises implementation, and makes all final decisions.
+This project was built with AI-assisted tooling using
+[Claude Opus](https://www.anthropic.com/claude) and
+[Kiro](https://kiro.dev). The human maintainer defines
+architecture, supervises implementation, and makes all
+final decisions.
 
 ## License
 
