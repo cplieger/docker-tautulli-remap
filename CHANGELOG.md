@@ -4,4 +4,4 @@
 
 ### Changed
 
-- update tautulli-remap updates
+- Rebuilt with updated publishing pipeline
