@@ -1,7 +1,7 @@
 # Changelog
 
-## 2026.03.06 (2026-03-06)
+## 2026.03.07 (2026-03-07)
 
-### Changed
+### Fixed
 
-- Rebuilt with updated publishing pipeline
+- handle strconv.Atoi errors explicitly

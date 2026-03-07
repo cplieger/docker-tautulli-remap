@@ -152,7 +152,10 @@ func setHealthy(ok bool) {
 }
 
 func loadConfig() config {
-	hours, _ := strconv.Atoi(getEnv("SCHEDULE_HOURS", "0")) //nolint:errcheck // default 0 on parse failure is fine
+	hours, err := strconv.Atoi(getEnv("SCHEDULE_HOURS", "0"))
+	if err != nil {
+		hours = 0
+	}
 	return config{
 		TautulliURL:       getEnv("TAUTULLI_URL", "http://tautulli:8181"),
 		TautulliAPIKey:    requireEnv("TAUTULLI_APIKEY"),
