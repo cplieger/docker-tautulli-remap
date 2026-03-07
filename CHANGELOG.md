@@ -2,6 +2,6 @@
 
 ## 2026.03.07 (2026-03-07)
 
-### Fixed
+### Added
 
-- handle strconv.Atoi errors explicitly
+- add wildcard support for Docker Hub and GHCR repos

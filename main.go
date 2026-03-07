@@ -124,7 +124,7 @@ func main() {
 		for {
 			select {
 			case <-ctx.Done():
-				slog.Info("shutting down")
+				slog.Info("shutting down", "cause", context.Cause(ctx))
 				return
 			case <-ticker.C:
 				setHealthy(run(&cfg))
@@ -135,17 +135,12 @@ func main() {
 	setHealthy(run(&cfg))
 }
 
-// touchHealthFile creates the health marker file.
-func touchHealthFile() {
-	if f, err := os.Create(healthFile); err == nil {
-		f.Close()
-	}
-}
-
-// setHealthy creates or removes the health marker based on run success.
+// setHealthy creates or removes the health marker file.
 func setHealthy(ok bool) {
 	if ok {
-		touchHealthFile()
+		if f, err := os.Create(healthFile); err == nil {
+			f.Close()
+		}
 	} else {
 		os.Remove(healthFile)
 	}
@@ -727,7 +722,7 @@ func getEnv(key, fallback string) string {
 func requireEnv(key string) string {
 	v := os.Getenv(key)
 	if v == "" {
-		fmt.Fprintf(os.Stderr, "%s environment variable is required\n", key)
+		slog.Error("required environment variable is missing", "key", key)
 		os.Exit(1)
 	}
 	return v
