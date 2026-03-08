@@ -166,25 +166,35 @@ func loadConfig() config {
 // normalizeGUID extracts a canonical ID from a Plex GUID string.
 // Returns empty string for unsupported formats (local://, com.plexapp.agents.none://).
 func normalizeGUID(guid string) string {
-	switch {
-	case strings.Contains(guid, "imdb://"):
-		return "imdb://" + extractAfter(guid, "imdb://")
-	case strings.Contains(guid, "themoviedb://"):
-		return "tmdb://" + extractAfter(guid, "themoviedb://")
-	case strings.Contains(guid, "tmdb://"):
-		return "tmdb://" + extractAfter(guid, "tmdb://")
-	case strings.Contains(guid, "thetvdb://"):
-		id := extractAfter(guid, "thetvdb://")
-		if i := strings.Index(id, "/"); i >= 0 {
-			id = id[:i]
+	// Map of source prefixes to canonical scheme prefixes.
+	// Order matters: longer prefixes must come first to avoid partial matches
+	// (e.g. "themoviedb://" before "tmdb://").
+	type mapping struct {
+		source    string
+		canonical string
+		stripPath bool // strip everything after first "/" in the ID
+	}
+	mappings := [...]mapping{
+		{"themoviedb://", "tmdb://", false},
+		{"thetvdb://", "tvdb://", true},
+		{"imdb://", "imdb://", false},
+		{"tmdb://", "tmdb://", false},
+		{"tvdb://", "tvdb://", false},
+		{"mbid://", "mbid://", false},
+		{"plex://", "plex://", false},
+	}
+
+	for _, m := range mappings {
+		if !strings.Contains(guid, m.source) {
+			continue
 		}
-		return "tvdb://" + id
-	case strings.Contains(guid, "tvdb://"):
-		return "tvdb://" + extractAfter(guid, "tvdb://")
-	case strings.Contains(guid, "mbid://"):
-		return "mbid://" + extractAfter(guid, "mbid://")
-	case strings.Contains(guid, "plex://"):
-		return "plex://" + extractAfter(guid, "plex://")
+		id := extractAfter(guid, m.source)
+		if m.stripPath {
+			if i := strings.Index(id, "/"); i >= 0 {
+				id = id[:i]
+			}
+		}
+		return m.canonical + id
 	}
 	return ""
 }
@@ -414,18 +424,22 @@ func matchStaleItems(
 		// Strategy 2: Match by title+year
 		if newKey == "" && cfg.FallbackTitleYear {
 			t := strings.ToLower(strings.TrimSpace(item.Title))
-			if pe, ok := byTitleYear[t+"|"+item.Year]; ok && pe.RatingKey != oldKey {
-				newKey = pe.RatingKey
-				method = methodTitleYear
+			if t != "" {
+				if pe, ok := byTitleYear[t+"|"+item.Year]; ok && pe.RatingKey != oldKey {
+					newKey = pe.RatingKey
+					method = methodTitleYear
+				}
 			}
 		}
 
 		// Strategy 3: Match by title only (require same media type to avoid movie/show collisions)
 		if newKey == "" && cfg.FallbackTitleOnly {
 			t := strings.ToLower(strings.TrimSpace(item.Title))
-			if pe, ok := byTitle[t]; ok && pe.RatingKey != oldKey && pe.Type == item.MediaType {
-				newKey = pe.RatingKey
-				method = fmt.Sprintf("title only (%s -> %s)", item.Year, pe.Year)
+			if t != "" {
+				if pe, ok := byTitle[t]; ok && pe.RatingKey != oldKey && pe.Type == item.MediaType {
+					newKey = pe.RatingKey
+					method = fmt.Sprintf("title only (%s -> %s)", item.Year, pe.Year)
+				}
 			}
 		}
 
@@ -544,7 +558,8 @@ func tautulliAPI(client *http.Client, cfg *config, cmd string, extra url.Values)
 		return nil, err
 	}
 	defer resp.Body.Close()
-	return io.ReadAll(resp.Body)
+	const maxBody = 50 << 20 // 50 MB — Tautulli history can be large
+	return io.ReadAll(io.LimitReader(resp.Body, maxBody))
 }
 
 // --- Plex helpers ---
@@ -563,6 +578,11 @@ type plexLibItem struct {
 }
 
 func plexItemExists(client *http.Client, cfg *config, ratingKey string) bool {
+	// Validate ratingKey is numeric to prevent path injection
+	if _, err := strconv.Atoi(ratingKey); err != nil {
+		slog.Warn("invalid rating key (non-numeric)", "key", ratingKey)
+		return false
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet,
@@ -597,7 +617,8 @@ func plexLibrarySections(client *http.Client, cfg *config) []plexSection {
 		return nil
 	}
 	defer resp.Body.Close()
-	body, err := io.ReadAll(resp.Body)
+	const maxBody = 10 << 20 // 10 MB
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxBody))
 	if err != nil {
 		slog.Error("failed to read Plex sections response", "error", err)
 		return nil
@@ -641,7 +662,8 @@ func plexLibraryAll(client *http.Client, cfg *config, sectionKey string) []plexL
 		return nil
 	}
 	defer resp.Body.Close()
-	body, err := io.ReadAll(resp.Body)
+	const maxBody = 100 << 20 // 100 MB — large Plex libraries can have many items
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxBody))
 	if err != nil {
 		slog.Error("failed to read Plex library response", "error", err)
 		return nil

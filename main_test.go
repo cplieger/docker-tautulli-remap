@@ -2,7 +2,9 @@ package main
 
 import (
 	"encoding/json"
+	"net/http"
 	"testing"
+	"time"
 )
 
 // --- Tests: normalizeGUID ---
@@ -111,6 +113,102 @@ func TestToInt(t *testing.T) {
 // allFallbacks returns a config with both fallback strategies enabled.
 func allFallbacks() *config {
 	return &config{FallbackTitleYear: true, FallbackTitleOnly: true}
+}
+
+// --- Tests: loadConfig ---
+
+func TestLoadConfig(t *testing.T) {
+	t.Setenv("TAUTULLI_URL", "http://localhost:8181")
+	t.Setenv("TAUTULLI_APIKEY", "test-key")
+	t.Setenv("PLEX_URL", "http://localhost:32400")
+	t.Setenv("PLEX_TOKEN", "test-token")
+	t.Setenv("DRY_RUN", "false")
+	t.Setenv("FALLBACK_TITLE_YEAR", "true")
+	t.Setenv("FALLBACK_TITLE_ONLY", "true")
+	t.Setenv("SCHEDULE_HOURS", "12")
+
+	cfg := loadConfig()
+
+	if cfg.TautulliURL != "http://localhost:8181" {
+		t.Errorf("TautulliURL = %q", cfg.TautulliURL)
+	}
+	if cfg.DryRun {
+		t.Error("DryRun should be false")
+	}
+	if !cfg.FallbackTitleYear {
+		t.Error("FallbackTitleYear should be true")
+	}
+	if !cfg.FallbackTitleOnly {
+		t.Error("FallbackTitleOnly should be true")
+	}
+	if cfg.ScheduleHours != 12 {
+		t.Errorf("ScheduleHours = %d, want 12", cfg.ScheduleHours)
+	}
+}
+
+func TestLoadConfigDefaults(t *testing.T) {
+	t.Setenv("TAUTULLI_APIKEY", "key")
+	t.Setenv("PLEX_TOKEN", "token")
+	t.Setenv("DRY_RUN", "")
+	t.Setenv("SCHEDULE_HOURS", "")
+	t.Setenv("FALLBACK_TITLE_YEAR", "")
+	t.Setenv("FALLBACK_TITLE_ONLY", "")
+	t.Setenv("TAUTULLI_URL", "")
+	t.Setenv("PLEX_URL", "")
+
+	cfg := loadConfig()
+
+	if cfg.TautulliURL != "http://tautulli:8181" {
+		t.Errorf("TautulliURL = %q, want default", cfg.TautulliURL)
+	}
+	if cfg.PlexURL != "http://plex:32400" {
+		t.Errorf("PlexURL = %q, want default", cfg.PlexURL)
+	}
+	if !cfg.DryRun {
+		t.Error("DryRun should default to true")
+	}
+	if cfg.ScheduleHours != 0 {
+		t.Errorf("ScheduleHours = %d, want 0", cfg.ScheduleHours)
+	}
+	if !cfg.FallbackTitleYear {
+		t.Error("FallbackTitleYear should default to true")
+	}
+	if cfg.FallbackTitleOnly {
+		t.Error("FallbackTitleOnly should default to false")
+	}
+}
+
+func TestLoadConfigInvalidScheduleHours(t *testing.T) {
+	t.Setenv("TAUTULLI_APIKEY", "key")
+	t.Setenv("PLEX_TOKEN", "token")
+	t.Setenv("SCHEDULE_HOURS", "notanumber")
+
+	cfg := loadConfig()
+	if cfg.ScheduleHours != 0 {
+		t.Errorf("ScheduleHours = %d, want 0 fallback", cfg.ScheduleHours)
+	}
+}
+
+// --- Tests: plexItemExists ratingKey validation ---
+
+func TestPlexItemExistsRejectsNonNumericKey(t *testing.T) {
+	// A crafted ratingKey like "../../../etc/passwd" should be rejected
+	// before making any HTTP request.
+	cfg := &config{PlexURL: "http://localhost:32400", PlexToken: "token"}
+	client := &http.Client{Timeout: 1 * time.Second}
+
+	tests := []string{
+		"../../../etc/passwd",
+		"abc",
+		"123/../../secret",
+		"",
+		"12 34",
+	}
+	for _, key := range tests {
+		if plexItemExists(client, cfg, key) {
+			t.Errorf("plexItemExists should return false for non-numeric key %q", key)
+		}
+	}
 }
 
 func TestMatchStaleItems(t *testing.T) {
@@ -281,6 +379,40 @@ func TestMatchStaleItems(t *testing.T) {
 
 		if len(matched) != 0 {
 			t.Errorf("expected 0 matched (title-only disabled), got %d", len(matched))
+		}
+	})
+
+	t.Run("whitespace-only title does not match", func(t *testing.T) {
+		stale := map[string]tautulliEntry{
+			"100": {RatingKey: "100", Title: "   ", Year: "2020", MediaType: "movie", GUID: ""},
+		}
+		byTitleYear := map[string]plexEntry{
+			"|2020": {RatingKey: "200", Title: "", Year: "2020", Type: "movie"},
+		}
+
+		matched, unmatched := matchStaleItems(allFallbacks(), stale, nil, byTitleYear, nil)
+
+		if len(matched) != 0 {
+			t.Errorf("expected 0 matched for whitespace title, got %d", len(matched))
+		}
+		if len(unmatched) != 1 {
+			t.Errorf("expected 1 unmatched, got %d", len(unmatched))
+		}
+	})
+
+	t.Run("empty GUID skips GUID matching", func(t *testing.T) {
+		stale := map[string]tautulliEntry{
+			"100": {RatingKey: "100", Title: "Test", Year: "2020", MediaType: "movie", GUID: ""},
+		}
+		byGUID := map[string]plexEntry{
+			"": {RatingKey: "200", Title: "Test", Year: "2020", Type: "movie"},
+		}
+
+		matched, _ := matchStaleItems(allFallbacks(), stale, byGUID, nil, nil)
+
+		// Empty GUID should NOT match the empty string key in byGUID
+		if len(matched) != 0 {
+			t.Errorf("expected 0 matched for empty GUID, got %d", len(matched))
 		}
 	})
 
