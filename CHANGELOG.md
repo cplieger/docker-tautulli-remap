@@ -1,11 +1,7 @@
 # Changelog
 
-## 2026.03.08 (2026-03-08)
-
-### Added
-
-- Add input validation and resource exhaustion protections
+## 2026.03.09 (2026-03-09)
 
 ### Changed
 
-- Refactor(tautulli-remap): extract GUID normalization mappings into table
+- Rebuilt with updated publishing pipeline
