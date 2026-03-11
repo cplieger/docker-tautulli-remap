@@ -13,6 +13,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -27,6 +28,8 @@ import (
 	"time"
 )
 
+// --- Constants ---
+
 const resultSuccess = "success"
 
 // Match method identifiers used in matchStaleItems results.
@@ -40,16 +43,27 @@ const (
 // without requiring an HTTP server or open port.
 const healthFile = "/tmp/.healthy"
 
+// Response body size limits to prevent OOM on unexpected payloads.
+const (
+	maxTautulliBody = 50 << 20  // 50 MB — Tautulli history can be large
+	maxPlexBody     = 100 << 20 // 100 MB — large Plex libraries
+	maxPlexSections = 10 << 20  // 10 MB — library sections list
+)
+
+// --- Configuration ---
+
 type config struct {
 	TautulliURL       string
 	TautulliAPIKey    string
 	PlexURL           string
 	PlexToken         string
+	ScheduleHours     int
 	DryRun            bool
 	FallbackTitleYear bool
 	FallbackTitleOnly bool
-	ScheduleHours     int
 }
+
+// --- Data types ---
 
 type historyResponse struct {
 	Response struct {
@@ -97,6 +111,30 @@ type unmatchResult struct {
 	Title, Year, OldKey, MediaType string
 }
 
+// --- GUID normalization ---
+
+// guidMapping maps a source prefix to its canonical scheme.
+type guidMapping struct {
+	source    string
+	canonical string
+	stripPath bool // strip everything after first "/" in the ID
+}
+
+// guidMappings defines the known GUID prefix transformations.
+// Longer prefixes come first to avoid partial matches
+// (e.g. "themoviedb://" before "tmdb://").
+var guidMappings = [...]guidMapping{
+	{"themoviedb://", "tmdb://", false},
+	{"thetvdb://", "tvdb://", true},
+	{"imdb://", "imdb://", false},
+	{"tmdb://", "tmdb://", false},
+	{"tvdb://", "tvdb://", false},
+	{"mbid://", "mbid://", false},
+	{"plex://", "plex://", false},
+}
+
+// --- Main ---
+
 func main() {
 	// CLI health probe for Docker healthcheck (distroless has no curl/wget).
 	// Checks for a marker file instead of making an HTTP request — no port needed.
@@ -108,32 +146,35 @@ func main() {
 	}
 
 	cfg := loadConfig()
+	logConfig(&cfg)
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
 	// Health file removed on exit; created/removed based on run() results.
-	defer os.Remove(healthFile)
+	defer setHealthy(false)
 
 	if cfg.ScheduleHours > 0 {
 		slog.Info("scheduled mode", "interval_hours", cfg.ScheduleHours)
 		ticker := time.NewTicker(time.Duration(cfg.ScheduleHours) * time.Hour)
 		defer ticker.Stop()
 
-		setHealthy(run(&cfg))
+		setHealthy(run(ctx, &cfg))
 		for {
 			select {
 			case <-ctx.Done():
 				slog.Info("shutting down", "cause", context.Cause(ctx))
 				return
 			case <-ticker.C:
-				setHealthy(run(&cfg))
+				setHealthy(run(ctx, &cfg))
 			}
 		}
 	}
 
-	setHealthy(run(&cfg))
+	setHealthy(run(ctx, &cfg))
 }
+
+// --- Health ---
 
 // setHealthy creates or removes the health marker file.
 func setHealthy(ok bool) {
@@ -146,6 +187,8 @@ func setHealthy(ok bool) {
 	}
 }
 
+// --- Environment ---
+
 func loadConfig() config {
 	hours, err := strconv.Atoi(getEnv("SCHEDULE_HOURS", "0"))
 	if err != nil {
@@ -156,35 +199,31 @@ func loadConfig() config {
 		TautulliAPIKey:    requireEnv("TAUTULLI_APIKEY"),
 		PlexURL:           getEnv("PLEX_URL", "http://plex:32400"),
 		PlexToken:         requireEnv("PLEX_TOKEN"),
+		ScheduleHours:     hours,
 		DryRun:            !strings.EqualFold(getEnv("DRY_RUN", "true"), "false"),
 		FallbackTitleYear: strings.EqualFold(getEnv("FALLBACK_TITLE_YEAR", "true"), "true"),
 		FallbackTitleOnly: strings.EqualFold(getEnv("FALLBACK_TITLE_ONLY", "false"), "true"),
-		ScheduleHours:     hours,
 	}
+}
+
+// logConfig logs the active configuration at startup (secrets redacted).
+func logConfig(cfg *config) {
+	slog.Info("configuration loaded",
+		"tautulli_url", cfg.TautulliURL,
+		"tautulli_apikey", "configured",
+		"plex_url", cfg.PlexURL,
+		"plex_token", "configured",
+		"dry_run", cfg.DryRun,
+		"fallback_title_year", cfg.FallbackTitleYear,
+		"fallback_title_only", cfg.FallbackTitleOnly,
+		"schedule_hours", cfg.ScheduleHours,
+	)
 }
 
 // normalizeGUID extracts a canonical ID from a Plex GUID string.
 // Returns empty string for unsupported formats (local://, com.plexapp.agents.none://).
 func normalizeGUID(guid string) string {
-	// Map of source prefixes to canonical scheme prefixes.
-	// Order matters: longer prefixes must come first to avoid partial matches
-	// (e.g. "themoviedb://" before "tmdb://").
-	type mapping struct {
-		source    string
-		canonical string
-		stripPath bool // strip everything after first "/" in the ID
-	}
-	mappings := [...]mapping{
-		{"themoviedb://", "tmdb://", false},
-		{"thetvdb://", "tvdb://", true},
-		{"imdb://", "imdb://", false},
-		{"tmdb://", "tmdb://", false},
-		{"tvdb://", "tvdb://", false},
-		{"mbid://", "mbid://", false},
-		{"plex://", "plex://", false},
-	}
-
-	for _, m := range mappings {
+	for _, m := range guidMappings {
 		if !strings.Contains(guid, m.source) {
 			continue
 		}
@@ -211,21 +250,23 @@ func extractAfter(s, prefix string) string {
 	return after
 }
 
-func run(cfg *config) bool {
-	client := &http.Client{Timeout: 30 * time.Second}
+// --- Core logic ---
+
+func run(ctx context.Context, cfg *config) bool {
+	client := &http.Client{Timeout: 2 * time.Minute}
 
 	if cfg.DryRun {
-		slog.Info("=== DRY RUN ===")
+		slog.Info("dry run enabled, skipping backup")
 	} else {
 		slog.Info("creating Tautulli backup")
-		if _, err := tautulliAPI(client, cfg, "backup_db", nil); err != nil {
+		if _, err := tautulliAPI(ctx, client, cfg, "backup_db", nil); err != nil {
 			slog.Error("backup failed", "error", err)
 		}
 	}
 
 	// Step 1: Collect items from Tautulli history
 	slog.Info("step 1: collecting items from Tautulli history")
-	tautulliItems := collectTautulliItems(client, cfg)
+	tautulliItems := collectTautulliItems(ctx, client, cfg)
 	if tautulliItems == nil {
 		return false
 	}
@@ -233,7 +274,7 @@ func run(cfg *config) bool {
 
 	// Step 2: Find stale keys (no longer exist in Plex)
 	slog.Info("step 2: checking keys against Plex")
-	stale := findStaleKeys(client, cfg, tautulliItems)
+	stale := findStaleKeys(ctx, client, cfg, tautulliItems)
 	slog.Info("step 2 done", "stale", len(stale), "total", len(tautulliItems))
 
 	if len(stale) == 0 {
@@ -243,23 +284,23 @@ func run(cfg *config) bool {
 
 	// Step 3: Build Plex library index (GUIDs + title/year)
 	slog.Info("step 3: building Plex library index")
-	plexByGUID, plexByTitleYear, plexByTitle := buildPlexIndex(client, cfg)
+	plexByGUID, plexByTitleYear, plexByTitle := buildPlexIndex(ctx, client, cfg)
 
 	// Step 4: Match stale items using GUID first, then title+year, then title
 	slog.Info("step 4: matching stale items")
 	matched, unmatched := matchStaleItems(cfg, stale, plexByGUID, plexByTitleYear, plexByTitle)
 
 	// Step 5: Apply remappings
-	applyRemappings(client, cfg, matched, unmatched)
+	applyRemappings(ctx, client, cfg, matched, unmatched)
 
 	// Step 6: Clear recently added
-	clearRecentlyAdded(client, cfg)
+	clearRecentlyAdded(ctx, client, cfg)
 
 	slog.Info("done")
 	return true
 }
 
-func collectTautulliItems(client *http.Client, cfg *config) map[string]tautulliEntry {
+func collectTautulliItems(ctx context.Context, client *http.Client, cfg *config) map[string]tautulliEntry {
 	items := map[string]tautulliEntry{} // ratingKey -> entry
 	start := 0
 	total := -1
@@ -275,7 +316,7 @@ func collectTautulliItems(client *http.Client, cfg *config) map[string]tautulliE
 			"length":           {"1000"},
 		}
 
-		body, err := tautulliAPIWithRetry(client, cfg, "get_history", params)
+		body, err := tautulliAPIWithRetry(ctx, client, cfg, "get_history", params)
 		if err != nil {
 			slog.Error("failed to get history", "error", err)
 			return nil
@@ -326,6 +367,7 @@ func collectTautulliItems(client *http.Client, cfg *config) map[string]tautulliE
 							title = row.Title
 						}
 						showGUID := guid
+						// Episode-level plex:// GUIDs don't help match shows
 						if strings.Contains(showGUID, "plex://episode/") {
 							showGUID = ""
 						}
@@ -341,20 +383,31 @@ func collectTautulliItems(client *http.Client, cfg *config) map[string]tautulliE
 		start += 1000
 		if start < total {
 			slog.Info("progress", "processed", start, "total", total, "unique_keys", len(items))
-			time.Sleep(500 * time.Millisecond) // pace requests to avoid overwhelming Tautulli
+			// Pace requests to avoid overwhelming Tautulli
+			timer := time.NewTimer(500 * time.Millisecond)
+			select {
+			case <-ctx.Done():
+				timer.Stop()
+				return nil
+			case <-timer.C:
+			}
 		}
 	}
 
 	return items
 }
 
-func findStaleKeys(client *http.Client, cfg *config, items map[string]tautulliEntry) map[string]tautulliEntry {
+func findStaleKeys(ctx context.Context, client *http.Client, cfg *config, items map[string]tautulliEntry) map[string]tautulliEntry {
 	stale := map[string]tautulliEntry{}
 	checked := 0
 
 	for key, item := range items {
+		if ctx.Err() != nil {
+			slog.Warn("stale key check interrupted", "checked", checked, "total", len(items))
+			return stale
+		}
 		checked++
-		if !plexItemExists(client, cfg, key) {
+		if !plexItemExists(ctx, client, cfg, key) {
 			stale[key] = item
 		}
 		if checked%200 == 0 {
@@ -365,7 +418,7 @@ func findStaleKeys(client *http.Client, cfg *config, items map[string]tautulliEn
 	return stale
 }
 
-func buildPlexIndex(client *http.Client, cfg *config) (
+func buildPlexIndex(ctx context.Context, client *http.Client, cfg *config) (
 	byGUID map[string]plexEntry,
 	byTitleYear map[string]plexEntry,
 	byTitle map[string]plexEntry,
@@ -374,13 +427,16 @@ func buildPlexIndex(client *http.Client, cfg *config) (
 	byTitleYear = map[string]plexEntry{}
 	byTitle = map[string]plexEntry{}
 
-	sections := plexLibrarySections(client, cfg)
+	sections := plexLibrarySections(ctx, client, cfg)
 	for _, sec := range sections {
+		if ctx.Err() != nil {
+			break
+		}
 		if sec.Type != "movie" && sec.Type != "show" {
 			continue
 		}
 		slog.Info("scanning library", "title", sec.Title)
-		libItems := plexLibraryAll(client, cfg, sec.Key)
+		libItems := plexLibraryAll(ctx, client, cfg, sec.Key)
 		for _, li := range libItems {
 			rk := strconv.Itoa(li.RatingKey)
 			y := strconv.Itoa(li.Year)
@@ -401,6 +457,8 @@ func buildPlexIndex(client *http.Client, cfg *config) (
 
 	return byGUID, byTitleYear, byTitle
 }
+
+// --- Matching ---
 
 func matchStaleItems(
 	cfg *config,
@@ -460,7 +518,9 @@ func matchStaleItems(
 	return matched, unmatched
 }
 
-func applyRemappings(client *http.Client, cfg *config, matched []matchResult, unmatched []unmatchResult) {
+// --- Remapping ---
+
+func applyRemappings(ctx context.Context, client *http.Client, cfg *config, matched []matchResult, unmatched []unmatchResult) {
 	if len(matched) > 0 {
 		slog.Info("remapping", "count", len(matched), "dry_run", cfg.DryRun)
 		for _, m := range matched {
@@ -468,12 +528,16 @@ func applyRemappings(client *http.Client, cfg *config, matched []matchResult, un
 				"title", m.Title, "year", m.Year, "type", m.MediaType,
 				"old_key", m.OldKey, "new_key", m.NewKey, "method", m.Method)
 			if !cfg.DryRun {
+				if ctx.Err() != nil {
+					slog.Warn("remapping interrupted", "remaining", len(matched))
+					break
+				}
 				params := url.Values{
 					"old_rating_key": {m.OldKey},
 					"new_rating_key": {m.NewKey},
 					"media_type":     {m.MediaType},
 				}
-				body, err := tautulliAPI(client, cfg, "update_metadata_details", params)
+				body, err := tautulliAPI(ctx, client, cfg, "update_metadata_details", params)
 				if err != nil {
 					slog.Error("remap failed", "title", m.Title, "error", err)
 					continue
@@ -502,13 +566,13 @@ func applyRemappings(client *http.Client, cfg *config, matched []matchResult, un
 	}
 }
 
-func clearRecentlyAdded(client *http.Client, cfg *config) {
+func clearRecentlyAdded(ctx context.Context, client *http.Client, cfg *config) {
 	if cfg.DryRun {
 		slog.Info("(dry run) would clear recently added items")
 		return
 	}
 	slog.Info("clearing recently added items")
-	body, err := tautulliAPI(client, cfg, "delete_recently_added", nil)
+	body, err := tautulliAPI(ctx, client, cfg, "delete_recently_added", nil)
 	if err != nil {
 		slog.Error("failed to clear recently added", "error", err)
 		return
@@ -526,15 +590,21 @@ func clearRecentlyAdded(client *http.Client, cfg *config) {
 
 // --- Tautulli helpers ---
 
-func tautulliAPIWithRetry(client *http.Client, cfg *config, cmd string, extra url.Values) ([]byte, error) {
+func tautulliAPIWithRetry(ctx context.Context, client *http.Client, cfg *config, cmd string, extra url.Values) ([]byte, error) {
 	var lastErr error
 	for attempt := range 3 {
 		if attempt > 0 {
 			delay := time.Duration(attempt*5) * time.Second
 			slog.Warn("retrying Tautulli API", "cmd", cmd, "attempt", attempt+1, "delay", delay)
-			time.Sleep(delay)
+			timer := time.NewTimer(delay)
+			select {
+			case <-ctx.Done():
+				timer.Stop()
+				return nil, context.Cause(ctx)
+			case <-timer.C:
+			}
 		}
-		body, err := tautulliAPI(client, cfg, cmd, extra)
+		body, err := tautulliAPI(ctx, client, cfg, cmd, extra)
 		if err == nil {
 			return body, nil
 		}
@@ -543,10 +613,10 @@ func tautulliAPIWithRetry(client *http.Client, cfg *config, cmd string, extra ur
 	return nil, lastErr
 }
 
-func tautulliAPI(client *http.Client, cfg *config, cmd string, extra url.Values) ([]byte, error) {
+func tautulliAPI(ctx context.Context, client *http.Client, cfg *config, cmd string, extra url.Values) ([]byte, error) {
 	params := url.Values{"cmd": {cmd}, "apikey": {cfg.TautulliAPIKey}}
 	maps.Copy(params, extra)
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet,
 		cfg.TautulliURL+"/api/v2?"+params.Encode(), http.NoBody)
@@ -558,8 +628,18 @@ func tautulliAPI(client *http.Client, cfg *config, cmd string, extra url.Values)
 		return nil, err
 	}
 	defer resp.Body.Close()
-	const maxBody = 50 << 20 // 50 MB — Tautulli history can be large
-	return io.ReadAll(io.LimitReader(resp.Body, maxBody))
+	if resp.StatusCode != http.StatusOK {
+		drainBody(resp.Body)
+		return nil, fmt.Errorf("tautulli %s: HTTP %d", cmd, resp.StatusCode)
+	}
+	return io.ReadAll(io.LimitReader(resp.Body, maxTautulliBody))
+}
+
+// drainBody reads and discards up to 4 KB to enable HTTP connection reuse.
+func drainBody(body io.ReadCloser) {
+	if _, err := io.CopyN(io.Discard, body, 4<<10); err != nil && !errors.Is(err, io.EOF) {
+		slog.Warn("failed to drain response body", "error", err)
+	}
 }
 
 // --- Plex helpers ---
@@ -577,13 +657,13 @@ type plexLibItem struct {
 	Year      int
 }
 
-func plexItemExists(client *http.Client, cfg *config, ratingKey string) bool {
+func plexItemExists(ctx context.Context, client *http.Client, cfg *config, ratingKey string) bool {
 	// Validate ratingKey is numeric to prevent path injection
 	if _, err := strconv.Atoi(ratingKey); err != nil {
 		slog.Warn("invalid rating key (non-numeric)", "key", ratingKey)
 		return false
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet,
 		cfg.PlexURL+"/library/metadata/"+ratingKey, http.NoBody)
@@ -596,12 +676,13 @@ func plexItemExists(client *http.Client, cfg *config, ratingKey string) bool {
 	if err != nil {
 		return false
 	}
-	resp.Body.Close()
+	defer resp.Body.Close()
+	drainBody(resp.Body)
 	return resp.StatusCode == http.StatusOK
 }
 
-func plexLibrarySections(client *http.Client, cfg *config) []plexSection {
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+func plexLibrarySections(ctx context.Context, client *http.Client, cfg *config) []plexSection {
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet,
 		cfg.PlexURL+"/library/sections", http.NoBody)
@@ -617,8 +698,12 @@ func plexLibrarySections(client *http.Client, cfg *config) []plexSection {
 		return nil
 	}
 	defer resp.Body.Close()
-	const maxBody = 10 << 20 // 10 MB
-	body, err := io.ReadAll(io.LimitReader(resp.Body, maxBody))
+	if resp.StatusCode != http.StatusOK {
+		drainBody(resp.Body)
+		slog.Error("Plex sections returned non-200", "status", resp.StatusCode)
+		return nil
+	}
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxPlexSections))
 	if err != nil {
 		slog.Error("failed to read Plex sections response", "error", err)
 		return nil
@@ -645,8 +730,13 @@ func plexLibrarySections(client *http.Client, cfg *config) []plexSection {
 	return sections
 }
 
-func plexLibraryAll(client *http.Client, cfg *config, sectionKey string) []plexLibItem {
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+func plexLibraryAll(ctx context.Context, client *http.Client, cfg *config, sectionKey string) []plexLibItem {
+	// Validate sectionKey is numeric to prevent path injection
+	if _, err := strconv.Atoi(sectionKey); err != nil {
+		slog.Warn("invalid section key (non-numeric)", "key", sectionKey)
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(ctx, 60*time.Second)
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet,
 		cfg.PlexURL+"/library/sections/"+sectionKey+"/all", http.NoBody)
@@ -662,8 +752,12 @@ func plexLibraryAll(client *http.Client, cfg *config, sectionKey string) []plexL
 		return nil
 	}
 	defer resp.Body.Close()
-	const maxBody = 100 << 20 // 100 MB — large Plex libraries can have many items
-	body, err := io.ReadAll(io.LimitReader(resp.Body, maxBody))
+	if resp.StatusCode != http.StatusOK {
+		drainBody(resp.Body)
+		slog.Error("Plex library returned non-200", "status", resp.StatusCode, "section", sectionKey)
+		return nil
+	}
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxPlexBody))
 	if err != nil {
 		slog.Error("failed to read Plex library response", "error", err)
 		return nil

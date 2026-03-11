@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"testing"
@@ -196,6 +197,7 @@ func TestPlexItemExistsRejectsNonNumericKey(t *testing.T) {
 	// before making any HTTP request.
 	cfg := &config{PlexURL: "http://localhost:32400", PlexToken: "token"}
 	client := &http.Client{Timeout: 1 * time.Second}
+	ctx := context.Background()
 
 	tests := []string{
 		"../../../etc/passwd",
@@ -205,7 +207,7 @@ func TestPlexItemExistsRejectsNonNumericKey(t *testing.T) {
 		"12 34",
 	}
 	for _, key := range tests {
-		if plexItemExists(client, cfg, key) {
+		if plexItemExists(ctx, client, cfg, key) {
 			t.Errorf("plexItemExists should return false for non-numeric key %q", key)
 		}
 	}
