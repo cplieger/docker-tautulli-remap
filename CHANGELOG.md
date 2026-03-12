@@ -1,5 +1,11 @@
 # Changelog
 
+## 2026.03.12-4ccec15 (2026-03-12)
+
+### Fixed
+
+- Improve startup health state and refactor history processing
+
 ## 2026.03.11-c669732 (2026-03-11)
 
 ### Changed

@@ -151,6 +151,11 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
+	// Remove stale health file from a previous run that may have crashed
+	// before its defer ran. Without this, the health probe would report
+	// healthy before the first run completes.
+	setHealthy(false)
+
 	// Health file removed on exit; created/removed based on run() results.
 	defer setHealthy(false)
 
@@ -343,58 +348,70 @@ func collectTautulliItems(ctx context.Context, client *http.Client, cfg *config)
 			break
 		}
 
-		for _, row := range rows {
-			year := strconv.Itoa(toInt(row.Year))
-			guid := normalizeGUID(row.GUID)
-			ratingKey := toInt(row.RatingKey)
-			grandparentRatingKey := toInt(row.GrandparentRatingKey)
-
-			switch row.MediaType {
-			case "movie":
-				key := strconv.Itoa(ratingKey)
-				if _, ok := items[key]; !ok {
-					items[key] = tautulliEntry{
-						RatingKey: key, Title: row.Title,
-						Year: year, MediaType: "movie", GUID: guid,
-					}
-				}
-			case "episode":
-				if grandparentRatingKey > 0 {
-					key := strconv.Itoa(grandparentRatingKey)
-					if _, ok := items[key]; !ok {
-						title := row.GrandparentTitle
-						if title == "" {
-							title = row.Title
-						}
-						showGUID := guid
-						// Episode-level plex:// GUIDs don't help match shows
-						if strings.Contains(showGUID, "plex://episode/") {
-							showGUID = ""
-						}
-						items[key] = tautulliEntry{
-							RatingKey: key, Title: title,
-							Year: year, MediaType: "show", GUID: showGUID,
-						}
-					}
-				}
-			}
+		for i := range rows {
+			processHistoryRow(&rows[i], items)
 		}
 
 		start += 1000
-		if start < total {
-			slog.Info("progress", "processed", start, "total", total, "unique_keys", len(items))
-			// Pace requests to avoid overwhelming Tautulli
-			timer := time.NewTimer(500 * time.Millisecond)
-			select {
-			case <-ctx.Done():
-				timer.Stop()
-				return nil
-			case <-timer.C:
-			}
+		if start >= total {
+			break
+		}
+		slog.Info("progress", "processed", start, "total", total, "unique_keys", len(items))
+		// Pace requests to avoid overwhelming Tautulli
+		timer := time.NewTimer(500 * time.Millisecond)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return nil
+		case <-timer.C:
 		}
 	}
 
 	return items
+}
+
+// processHistoryRow extracts a tautulliEntry from a single history row
+// and inserts it into items (keyed by rating key). Skips rows with
+// unparseable or zero rating keys.
+func processHistoryRow(row *historyItem, items map[string]tautulliEntry) {
+	year := strconv.Itoa(toInt(row.Year))
+	guid := normalizeGUID(row.GUID)
+
+	switch row.MediaType {
+	case "movie":
+		ratingKey := toInt(row.RatingKey)
+		if ratingKey <= 0 {
+			return
+		}
+		key := strconv.Itoa(ratingKey)
+		if _, ok := items[key]; !ok {
+			items[key] = tautulliEntry{
+				RatingKey: key, Title: row.Title,
+				Year: year, MediaType: "movie", GUID: guid,
+			}
+		}
+	case "episode":
+		grandparentRatingKey := toInt(row.GrandparentRatingKey)
+		if grandparentRatingKey <= 0 {
+			return
+		}
+		key := strconv.Itoa(grandparentRatingKey)
+		if _, ok := items[key]; !ok {
+			title := row.GrandparentTitle
+			if title == "" {
+				title = row.Title
+			}
+			showGUID := guid
+			// Episode-level plex:// GUIDs don't help match shows
+			if strings.Contains(showGUID, "plex://episode/") {
+				showGUID = ""
+			}
+			items[key] = tautulliEntry{
+				RatingKey: key, Title: title,
+				Year: year, MediaType: "show", GUID: showGUID,
+			}
+		}
+	}
 }
 
 func findStaleKeys(ctx context.Context, client *http.Client, cfg *config, items map[string]tautulliEntry) map[string]tautulliEntry {

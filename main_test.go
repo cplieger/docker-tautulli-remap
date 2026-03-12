@@ -109,6 +109,136 @@ func TestToInt(t *testing.T) {
 	}
 }
 
+// --- Tests: processHistoryRow ---
+
+func TestProcessHistoryRow(t *testing.T) {
+	t.Run("movie with valid rating key", func(t *testing.T) {
+		items := map[string]tautulliEntry{}
+		row := &historyItem{
+			RatingKey: float64(42), Title: "Test Movie",
+			Year: float64(2020), MediaType: "movie",
+			GUID: "imdb://tt1234567",
+		}
+		processHistoryRow(row, items)
+		if len(items) != 1 {
+			t.Fatalf("expected 1 item, got %d", len(items))
+		}
+		if items["42"].Title != "Test Movie" {
+			t.Errorf("unexpected title: %s", items["42"].Title)
+		}
+	})
+
+	t.Run("movie with zero rating key is skipped", func(t *testing.T) {
+		items := map[string]tautulliEntry{}
+		row := &historyItem{
+			RatingKey: float64(0), Title: "Bad Movie",
+			Year: float64(2020), MediaType: "movie",
+		}
+		processHistoryRow(row, items)
+		if len(items) != 0 {
+			t.Errorf("expected 0 items for zero rating key, got %d", len(items))
+		}
+	})
+
+	t.Run("movie with unparseable rating key is skipped", func(t *testing.T) {
+		items := map[string]tautulliEntry{}
+		row := &historyItem{
+			RatingKey: "not_a_number", Title: "Bad Movie",
+			Year: float64(2020), MediaType: "movie",
+		}
+		processHistoryRow(row, items)
+		if len(items) != 0 {
+			t.Errorf("expected 0 items for unparseable rating key, got %d", len(items))
+		}
+	})
+
+	t.Run("episode uses grandparent rating key", func(t *testing.T) {
+		items := map[string]tautulliEntry{}
+		row := &historyItem{
+			RatingKey: float64(99), GrandparentRatingKey: float64(50),
+			Title: "Episode Title", GrandparentTitle: "Show Title",
+			Year: float64(2021), MediaType: "episode",
+			GUID: "tvdb://271557",
+		}
+		processHistoryRow(row, items)
+		if len(items) != 1 {
+			t.Fatalf("expected 1 item, got %d", len(items))
+		}
+		entry := items["50"]
+		if entry.Title != "Show Title" {
+			t.Errorf("expected grandparent title, got %q", entry.Title)
+		}
+		if entry.MediaType != "show" {
+			t.Errorf("expected media type 'show', got %q", entry.MediaType)
+		}
+	})
+
+	t.Run("episode with zero grandparent key is skipped", func(t *testing.T) {
+		items := map[string]tautulliEntry{}
+		row := &historyItem{
+			RatingKey: float64(99), GrandparentRatingKey: float64(0),
+			Title: "Episode", MediaType: "episode",
+		}
+		processHistoryRow(row, items)
+		if len(items) != 0 {
+			t.Errorf("expected 0 items for zero grandparent key, got %d", len(items))
+		}
+	})
+
+	t.Run("episode strips plex episode GUID", func(t *testing.T) {
+		items := map[string]tautulliEntry{}
+		row := &historyItem{
+			RatingKey: float64(99), GrandparentRatingKey: float64(50),
+			Title: "Ep", GrandparentTitle: "Show",
+			Year: float64(2021), MediaType: "episode",
+			GUID: "plex://episode/5d9c135046115600200d30a2",
+		}
+		processHistoryRow(row, items)
+		if items["50"].GUID != "" {
+			t.Errorf("expected empty GUID for plex episode, got %q", items["50"].GUID)
+		}
+	})
+
+	t.Run("episode falls back to episode title when grandparent empty", func(t *testing.T) {
+		items := map[string]tautulliEntry{}
+		row := &historyItem{
+			RatingKey: float64(99), GrandparentRatingKey: float64(50),
+			Title: "Fallback Title", GrandparentTitle: "",
+			Year: float64(2021), MediaType: "episode",
+		}
+		processHistoryRow(row, items)
+		if items["50"].Title != "Fallback Title" {
+			t.Errorf("expected fallback title, got %q", items["50"].Title)
+		}
+	})
+
+	t.Run("duplicate key is not overwritten", func(t *testing.T) {
+		items := map[string]tautulliEntry{
+			"42": {RatingKey: "42", Title: "First", Year: "2020", MediaType: "movie"},
+		}
+		row := &historyItem{
+			RatingKey: float64(42), Title: "Second",
+			Year: float64(2021), MediaType: "movie",
+		}
+		processHistoryRow(row, items)
+		if items["42"].Title != "First" {
+			t.Errorf("expected first entry to be preserved, got %q", items["42"].Title)
+		}
+	})
+
+	t.Run("unknown media type is ignored", func(t *testing.T) {
+		items := map[string]tautulliEntry{}
+		row := &historyItem{
+			RatingKey: float64(42), Title: "Music",
+			Year: float64(2020), MediaType: "track",
+		}
+		processHistoryRow(row, items)
+		if len(items) != 0 {
+			t.Errorf("expected 0 items for unknown media type, got %d", len(items))
+		}
+	})
+}
+
 // --- Tests: matchStaleItems ---
 
 // allFallbacks returns a config with both fallback strategies enabled.
