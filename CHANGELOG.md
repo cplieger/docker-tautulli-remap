@@ -1,11 +1,5 @@
 # Changelog
 
-## 2026.03.12 (2026-03-12)
-
-### Changed
-
-- Minor code improvements and optimizations
-
 ## 2026.03.11 (2026-03-11)
 
 ### Changed
