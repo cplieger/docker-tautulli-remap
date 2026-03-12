@@ -1,17 +1,11 @@
 # Changelog
 
-## 2026.03.11 (2026-03-11)
+## 2026.03.11-c669732 (2026-03-11)
 
 ### Changed
 
 - Refactor(tautulli-remap): reorganize code structure and improve error handling
 - Migrate to structured logging and enhance context handling
-
-## 2026.03.10 (2026-03-10)
-
-### Changed
-
-- Minor code improvements and optimizations
 
 ## 2026.03.07-72ffdd8 (2026-03-08)
 
