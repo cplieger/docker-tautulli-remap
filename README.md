@@ -165,7 +165,7 @@ Issues, suggestions, and pull requests are welcome.
 
 ## Credits
 
-This is an original tool that integrates with [Tautulli](https://github.com/Tautulli/Tautulli). Thanks to the Tautulli maintainers for building the platform this tool extends.
+This is an original tool that builds upon [Tautulli](https://github.com/Tautulli/Tautulli).
 Inspired by [SwiftPanda16's Tautulli rating key update script](https://gist.github.com/JonnyWong16/f554f407832076919dc6864a78432db2).
 
 ## Disclaimer
