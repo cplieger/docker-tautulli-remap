@@ -141,6 +141,30 @@ docker inspect --format='{{json .State.Health.Log}}' tautulli-remap | python3 -m
 | Docker | `/tautulli-remap health` | Exit 0 = last run completed successfully |
 
 
+## Code Quality
+
+| Metric | Value |
+|--------|-------|
+| [Test Coverage](https://go.dev/blog/cover) | 91.4% |
+| Tests | 164 |
+| [Cyclomatic Complexity](https://en.wikipedia.org/wiki/Cyclomatic_complexity) (avg) | 6.3 |
+| [Cognitive Complexity](https://www.sonarsource.com/docs/CognitiveComplexity.pdf) (avg) | 8.8 |
+| [Mutation Efficacy](https://en.wikipedia.org/wiki/Mutation_testing) | 78–100% |
+| Test Framework | Property-based ([rapid](https://github.com/flyingmutant/rapid)) + table-driven |
+
+Tests cover the full matching pipeline (GUID, title+year, and
+title-only strategies with type guards, fallback chains, and
+whitespace handling), all Tautulli and Plex API functions with HTTP
+mock servers (including retry logic, pagination, context
+cancellation), stale key detection, Plex library indexing,
+remapping with dry-run/live modes, and the end-to-end run function.
+Property-based tests verify GUID normalization idempotency and
+panic-freedom, and rating key type coercion round-trips.
+
+Not tested: `main()` (signal handling and scheduler loop) — a thin
+wrapper around the tested core logic, validated by Docker
+healthchecks in production.
+
 ## Dependencies
 
 All dependencies are updated automatically via [Renovate](https://github.com/renovatebot/renovate) and pinned by digest or version for reproducibility.

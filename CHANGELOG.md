@@ -1,5 +1,17 @@
 # Changelog
 
+## 2026.03.14-558eb98 (2026-03-14)
+
+### Added
+
+- Test(tautulli-remap): add property-based and edge case tests
+- Test(tautulli-remap): add comprehensive HTTP and API integration tests
+
+### Changed
+
+- Refactor(tautulli-remap): extract media type string constants
+- Style(tautulli-remap): align variable declarations and simplify switch statements
+
 ## 2026.03.12-4ccec15 (2026-03-12)
 
 ### Fixed

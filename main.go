@@ -36,6 +36,8 @@ const resultSuccess = "success"
 const (
 	methodGUID      = "guid"
 	methodTitleYear = "title+year"
+	mediaMovie      = "movie"
+	mediaShow       = "show"
 )
 
 // healthFile is touched on startup and removed on shutdown.
@@ -48,6 +50,12 @@ const (
 	maxTautulliBody = 50 << 20  // 50 MB — Tautulli history can be large
 	maxPlexBody     = 100 << 20 // 100 MB — large Plex libraries
 	maxPlexSections = 10 << 20  // 10 MB — library sections list
+)
+
+// Delay durations — package-level vars so tests can override for speed.
+var (
+	retryDelayUnit  = 5 * time.Second        // multiplied by attempt number in tautulliAPIWithRetry
+	paginationDelay = 500 * time.Millisecond // pause between history pages
 )
 
 // --- Configuration ---
@@ -358,7 +366,7 @@ func collectTautulliItems(ctx context.Context, client *http.Client, cfg *config)
 		}
 		slog.Info("progress", "processed", start, "total", total, "unique_keys", len(items))
 		// Pace requests to avoid overwhelming Tautulli
-		timer := time.NewTimer(500 * time.Millisecond)
+		timer := time.NewTimer(paginationDelay)
 		select {
 		case <-ctx.Done():
 			timer.Stop()
@@ -378,7 +386,7 @@ func processHistoryRow(row *historyItem, items map[string]tautulliEntry) {
 	guid := normalizeGUID(row.GUID)
 
 	switch row.MediaType {
-	case "movie":
+	case mediaMovie:
 		ratingKey := toInt(row.RatingKey)
 		if ratingKey <= 0 {
 			return
@@ -387,7 +395,7 @@ func processHistoryRow(row *historyItem, items map[string]tautulliEntry) {
 		if _, ok := items[key]; !ok {
 			items[key] = tautulliEntry{
 				RatingKey: key, Title: row.Title,
-				Year: year, MediaType: "movie", GUID: guid,
+				Year: year, MediaType: mediaMovie, GUID: guid,
 			}
 		}
 	case "episode":
@@ -408,7 +416,7 @@ func processHistoryRow(row *historyItem, items map[string]tautulliEntry) {
 			}
 			items[key] = tautulliEntry{
 				RatingKey: key, Title: title,
-				Year: year, MediaType: "show", GUID: showGUID,
+				Year: year, MediaType: mediaShow, GUID: showGUID,
 			}
 		}
 	}
@@ -449,7 +457,7 @@ func buildPlexIndex(ctx context.Context, client *http.Client, cfg *config) (
 		if ctx.Err() != nil {
 			break
 		}
-		if sec.Type != "movie" && sec.Type != "show" {
+		if sec.Type != mediaMovie && sec.Type != mediaShow {
 			continue
 		}
 		slog.Info("scanning library", "title", sec.Title)
@@ -611,7 +619,7 @@ func tautulliAPIWithRetry(ctx context.Context, client *http.Client, cfg *config,
 	var lastErr error
 	for attempt := range 3 {
 		if attempt > 0 {
-			delay := time.Duration(attempt*5) * time.Second
+			delay := time.Duration(attempt) * retryDelayUnit
 			slog.Warn("retrying Tautulli API", "cmd", cmd, "attempt", attempt+1, "delay", delay)
 			timer := time.NewTimer(delay)
 			select {
