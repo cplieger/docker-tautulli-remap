@@ -60,9 +60,9 @@ services:
 
     environment:
       TZ: "Europe/Paris"
-      TAUTULLI_URL: "http://tautulli:8181"
+      TAUTULLI_URL: "\\http://tautulli:8181"
       TAUTULLI_APIKEY: "your-tautulli-apikey"
-      PLEX_URL: "http://plex:32400"
+      PLEX_URL: "\\http://plex:32400"
       PLEX_TOKEN: "your-plex-token"
       SCHEDULE_HOURS: "24"  # 0 = run once and exit
       FALLBACK_TITLE_YEAR: "true"
@@ -101,9 +101,9 @@ For additional configuration options not covered by this image's environment var
 | Variable | Description | Default | Required |
 |----------|-------------|---------|----------|
 | `TZ` | Container timezone | `Europe/Paris` | No |
-| `TAUTULLI_URL` | Tautulli instance URL (Docker DNS name or LAN IP) | `http://tautulli:8181` | No |
+| `TAUTULLI_URL` | Tautulli instance URL (Docker DNS name or LAN IP) | `\http://tautulli:8181` | No |
 | `TAUTULLI_APIKEY` | Tautulli API key (Settings → Web Interface → API Key) | - | Yes |
-| `PLEX_URL` | Plex Media Server URL (Docker DNS name or LAN IP) | `http://plex:32400` | No |
+| `PLEX_URL` | Plex Media Server URL (Docker DNS name or LAN IP) | `\http://plex:32400` | No |
 | `PLEX_TOKEN` | Plex authentication token (see Plex support article) | - | Yes |
 | `SCHEDULE_HOURS` | Hours between remap runs (0 = run once and exit) | `24` | No |
 | `FALLBACK_TITLE_YEAR` | Try title+year matching when GUID match fails | `true` | No |
@@ -149,7 +149,7 @@ docker inspect --format='{{json .State.Health.Log}}' tautulli-remap | python3 -m
 | Tests | 164 |
 | [Cyclomatic Complexity](https://en.wikipedia.org/wiki/Cyclomatic_complexity) (avg) | 6.3 |
 | [Cognitive Complexity](https://www.sonarsource.com/docs/CognitiveComplexity.pdf) (avg) | 8.8 |
-| [Mutation Efficacy](https://en.wikipedia.org/wiki/Mutation_testing) | 78–100% |
+| [Mutation Efficacy](https://en.wikipedia.org/wiki/Mutation_testing) | 77.0% (59 runs) |
 | Test Framework | Property-based ([rapid](https://github.com/flyingmutant/rapid)) + table-driven |
 
 Tests cover the full matching pipeline (GUID, title+year, and
