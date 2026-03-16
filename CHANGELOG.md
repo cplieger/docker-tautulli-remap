@@ -1,5 +1,11 @@
 # Changelog
 
+## 2026.03.15-e917ce6 (2026-03-16)
+
+### Dependencies
+
+- Update gcr.io/distroless/static-debian13:nonroot docker digest to e3f9456 (#138)
+
 ## 2026.03.14-558eb98 (2026-03-14)
 
 ### Added
