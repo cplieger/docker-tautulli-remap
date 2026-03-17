@@ -165,6 +165,33 @@ Not tested: `main()` (signal handling and scheduler loop) — a thin
 wrapper around the tested core logic, validated by Docker
 healthchecks in production.
 
+## Security Review
+
+**No vulnerabilities found.** All scans clean across 8 tools.
+
+| Tool | Result |
+|------|--------|
+| [govulncheck](https://pkg.go.dev/golang.org/x/vuln/cmd/govulncheck) | No vulnerabilities in call graph |
+| [golangci-lint](https://golangci-lint.run/) (gosec, gocritic) | 0 issues |
+| [trivy](https://trivy.dev/) | 0 vulnerabilities |
+| [grype](https://github.com/anchore/grype) | 0 vulnerabilities |
+| [gitleaks](https://github.com/gitleaks/gitleaks) | No secrets detected |
+| [semgrep](https://semgrep.dev/) | 1 info (false positive) |
+| [hadolint](https://github.com/hadolint/hadolint) | Clean |
+
+No network listener; connects outbound to Tautulli and Plex
+only. `DRY_RUN=true` by default prevents accidental changes.
+API tokens are never logged. Stdlib-only (zero external deps).
+Runs as `nonroot` on a distroless base image with no shell.
+
+**Details for advanced users:** All HTTP clients use explicit
+timeouts (2 min client, 30s per-request). Response bodies capped
+via `io.LimitReader` (50 MB Tautulli, 100 MB Plex). Rating keys
+validated as numeric before URL interpolation (prevents path
+traversal). Plex token sent via `X-Plex-Token` header, not query
+string. No `unsafe`, `reflect`, `os/exec`, or file I/O beyond
+the health marker.
+
 ## Dependencies
 
 All dependencies are updated automatically via [Renovate](https://github.com/renovatebot/renovate) and pinned by digest or version for reproducibility.
