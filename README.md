@@ -1,8 +1,8 @@
-# docker-tautulli-remap
+# tautulli-remap
 
 ![License: GPL-3.0](https://img.shields.io/badge/license-GPL--3.0-blue)
-[![GitHub release](https://img.shields.io/github/v/release/cplieger/docker-tautulli-remap)](https://github.com/cplieger/docker-tautulli-remap/releases)
-[![Image Size](https://ghcr-badge.egpl.dev/cplieger/tautulli-remap/size)](https://github.com/cplieger/docker-tautulli-remap/pkgs/container/tautulli-remap)
+[![GitHub release](https://img.shields.io/github/v/release/cplieger/tautulli-remap)](https://github.com/cplieger/tautulli-remap/releases)
+[![Image Size](https://ghcr-badge.egpl.dev/cplieger/tautulli-remap/size)](https://github.com/cplieger/tautulli-remap/pkgs/container/tautulli-remap)
 ![Platforms](https://img.shields.io/badge/platforms-amd64%20%7C%20arm64-blue)
 ![base: Distroless](https://img.shields.io/badge/base-Distroless_nonroot-4285F4?logo=google)
 
