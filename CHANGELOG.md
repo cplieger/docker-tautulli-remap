@@ -1,5 +1,11 @@
 # Changelog
 
+## 2026.03.21-4ca7dd4 (2026-03-22)
+
+### Added
+
+- Enhance security with API key sanitization in error messages
+
 ## 2026.03.15-e917ce6 (2026-03-16)
 
 ### Dependencies

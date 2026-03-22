@@ -646,11 +646,11 @@ func tautulliAPI(ctx context.Context, client *http.Client, cfg *config, cmd stri
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet,
 		cfg.TautulliURL+"/api/v2?"+params.Encode(), http.NoBody)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("tautulli %s: %w", cmd, sanitizeErr(err))
 	}
 	resp, err := client.Do(req)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("tautulli %s: %w", cmd, sanitizeErr(err))
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
@@ -830,6 +830,18 @@ func plexLibraryAll(ctx context.Context, client *http.Client, cfg *config, secti
 }
 
 // --- Utilities ---
+
+// sanitizeErr strips the query string from *url.Error messages to prevent
+// API keys from leaking into log output.
+func sanitizeErr(err error) error {
+	var ue *url.Error
+	if errors.As(err, &ue) {
+		if i := strings.Index(ue.URL, "?"); i >= 0 {
+			ue.URL = ue.URL[:i] + "?<redacted>"
+		}
+	}
+	return err
+}
 
 // toInt coerces a JSON value (float64, string, or json.Number) to int.
 // Returns 0 if the value is nil, empty, or unparseable.

@@ -189,8 +189,9 @@ timeouts (2 min client, 30s per-request). Response bodies capped
 via `io.LimitReader` (50 MB Tautulli, 100 MB Plex). Rating keys
 validated as numeric before URL interpolation (prevents path
 traversal). Plex token sent via `X-Plex-Token` header, not query
-string. No `unsafe`, `reflect`, `os/exec`, or file I/O beyond
-the health marker.
+string. HTTP error messages sanitized to strip query parameters
+(prevents API key leakage in logs). No `unsafe`, `reflect`,
+`os/exec`, or file I/O beyond the health marker.
 
 ## Dependencies
 

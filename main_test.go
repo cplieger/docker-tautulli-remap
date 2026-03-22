@@ -2168,3 +2168,72 @@ func TestTautulliAPIWithRetry_success_on_second_attempt(t *testing.T) {
 		t.Errorf("calls = %d, want 2 (fail once, succeed once)", calls)
 	}
 }
+
+// --- Tests: sanitizeErr ---
+
+func TestSanitizeErr(t *testing.T) {
+	t.Run("strips query string from url.Error", func(t *testing.T) {
+		ue := &url.Error{
+			Op:  "Get",
+			URL: "http://tautulli:8181/api/v2?apikey=secret123&cmd=get_history",
+			Err: fmt.Errorf("connection refused"),
+		}
+		got := sanitizeErr(ue)
+		s := got.Error()
+		if strings.Contains(s, "secret123") {
+			t.Errorf("sanitizeErr leaked API key: %s", s)
+		}
+		if !strings.Contains(s, "?<redacted>") {
+			t.Errorf("expected redacted query string, got: %s", s)
+		}
+	})
+
+	t.Run("passes through non-url.Error unchanged", func(t *testing.T) {
+		err := fmt.Errorf("some other error")
+		got := sanitizeErr(err)
+		if got.Error() != "some other error" {
+			t.Errorf("expected unchanged error, got: %s", got.Error())
+		}
+	})
+
+	t.Run("handles url.Error without query string", func(t *testing.T) {
+		ue := &url.Error{
+			Op:  "Get",
+			URL: "http://tautulli:8181/api/v2",
+			Err: fmt.Errorf("connection refused"),
+		}
+		got := sanitizeErr(ue)
+		s := got.Error()
+		if strings.Contains(s, "<redacted>") {
+			t.Errorf("should not redact URL without query string: %s", s)
+		}
+	})
+}
+
+// TestTautulliAPI_error_does_not_leak_apikey verifies that HTTP errors
+// from tautulliAPI do not contain the API key in the error message.
+func TestTautulliAPI_error_does_not_leak_apikey(t *testing.T) {
+	// Use a server that immediately closes the connection
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		// Force a connection error by hijacking and closing
+		hj, ok := w.(http.Hijacker)
+		if !ok {
+			t.Skip("server doesn't support hijacking")
+		}
+		conn, _, _ := hj.Hijack()
+		conn.Close()
+	}))
+	t.Cleanup(srv.Close)
+
+	cfg := &config{
+		TautulliURL:    srv.URL,
+		TautulliAPIKey: "supersecretkey123",
+	}
+	_, err := tautulliAPI(context.Background(), &http.Client{}, cfg, "test", nil)
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if strings.Contains(err.Error(), "supersecretkey123") {
+		t.Errorf("error message leaked API key: %s", err.Error())
+	}
+}
