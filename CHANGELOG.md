@@ -1,5 +1,44 @@
 # Changelog
 
+## 2026.04.01-c71639f (2026-04-01)
+
+### Added
+
+- Enhance security with API key sanitization in error messages
+- Test(tautulli-remap): add property-based and edge case tests
+- Test(tautulli-remap): add comprehensive HTTP and API integration tests
+- Add input validation and resource exhaustion protections
+- Test(apps): add comprehensive test coverage for identity loading and cert conversion
+- Add fallback matching strategies and improve service dependencies
+- Add retry logic and request pacing for API calls
+- Add flexible JSON type handling for numeric fields
+- Migrate metadata fixer from Python to Go with improved matching
+
+### Fixed
+
+- Improve startup health state and refactor history processing
+- Handle strconv.Atoi errors explicitly
+
+### Changed
+
+- Refactor(tautulli-remap): extract media type string constants
+- Style(tautulli-remap): align variable declarations and simplify switch statements
+- Refactor(tautulli-remap): reorganize code structure and improve error handling
+- Migrate to structured logging and enhance context handling
+- Refactor(tautulli-remap): extract GUID normalization mappings into table
+- Refactor(apps): extract method identifiers to constants and improve deployment docs formatting
+- Test(apps): refactor test structure and improve helper functions
+- Update health checks and standardize environment variable quoting
+- Update encrypted environment files across all services
+- Docs(steering): Document operational constraints and infrastructure patterns
+- Hardcode health probe port to 9147
+- Update to prebuilt image with pinned digest
+
+### Dependencies
+
+- Update gcr.io/distroless/static-debian13:nonroot docker digest to e3f9456 (#138)
+- Update third-party dependencies
+
 ## 2026.03.21-4ca7dd4 (2026-03-22)
 
 ### Added
