@@ -1,5 +1,16 @@
 # Changelog
 
+## 2026.04.07-8d3d8c9 (2026-04-08)
+
+### Changed
+
+- Update Go toolchain configuration
+
+### Dependencies
+
+- Update go to v1.26.2 (#172)
+- Update golang:1.26-alpine docker digest to c2a1f7b (#175)
+
 ## 2026.04.01-c71639f (2026-04-01)
 
 ### Added
