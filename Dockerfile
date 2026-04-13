@@ -5,14 +5,15 @@ ENV GOTOOLCHAIN=auto
 WORKDIR /src
 ARG TARGETOS
 ARG TARGETARCH
-COPY go.mod main.go ./
+COPY go.mod go.sum ./
+RUN go mod download
+COPY main.go ./
 RUN --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/root/.cache/go-build \
     CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -trimpath -ldflags="-s -w" -o /tautulli-remap main.go
 
 FROM gcr.io/distroless/static-debian13:nonroot@sha256:e3f945647ffb95b5839c07038d64f9811adf17308b9121d8a2b87b6a22a80a39
 
-WORKDIR /
 COPY --from=builder /tautulli-remap /tautulli-remap
 USER nonroot:nonroot
 ENTRYPOINT ["/tautulli-remap"]

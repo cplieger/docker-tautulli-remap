@@ -1,5 +1,17 @@
 # Changelog
 
+## 2026.04.11-0d28067 (2026-04-13)
+
+### Changed
+
+- Refactor(tautulli-remap): improve error handling, logging, and code clarity
+- Update Go toolchain configuration
+
+### Dependencies
+
+- Update go to v1.26.2 (#172)
+- Update golang:1.26-alpine docker digest to c2a1f7b (#175)
+
 ## 2026.04.07-8d3d8c9 (2026-04-08)
 
 ### Changed

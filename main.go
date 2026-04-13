@@ -38,6 +38,7 @@ const (
 	methodTitleYear = "title+year"
 	mediaMovie      = "movie"
 	mediaShow       = "show"
+	mediaEpisode    = "episode"
 )
 
 // healthFile is touched on startup and removed on shutdown.
@@ -47,9 +48,10 @@ const healthFile = "/tmp/.healthy"
 
 // Response body size limits to prevent OOM on unexpected payloads.
 const (
-	maxTautulliBody = 50 << 20  // 50 MB — Tautulli history can be large
-	maxPlexBody     = 100 << 20 // 100 MB — large Plex libraries
-	maxPlexSections = 10 << 20  // 10 MB — library sections list
+	maxTautulliBody    = 50 << 20  // 50 MB — Tautulli history can be large
+	maxPlexBody        = 100 << 20 // 100 MB — large Plex libraries
+	maxPlexSections    = 10 << 20  // 10 MB — library sections list
+	maxTautulliRecords = 500_000   // sanity cap on total history records
 )
 
 // Delay durations — package-level vars so tests can override for speed.
@@ -109,6 +111,15 @@ type plexEntry struct {
 	Year      string
 	Type      string   // "movie" or "show"
 	GUIDs     []string // all normalized GUIDs
+}
+
+// tautulliResult is the common response wrapper for Tautulli API calls
+// that only need to check success/failure.
+type tautulliResult struct {
+	Response struct {
+		Result  string `json:"result"`
+		Message string `json:"message"`
+	} `json:"response"`
 }
 
 type matchResult struct {
@@ -172,14 +183,22 @@ func main() {
 		ticker := time.NewTicker(time.Duration(cfg.ScheduleHours) * time.Hour)
 		defer ticker.Stop()
 
-		setHealthy(run(ctx, &cfg))
+		ok := run(ctx, &cfg)
+		if !ok {
+			slog.Warn("initial run failed, will retry on schedule", "retry_in_hours", cfg.ScheduleHours)
+		}
+		setHealthy(ok)
 		for {
 			select {
 			case <-ctx.Done():
 				slog.Info("shutting down", "cause", context.Cause(ctx))
 				return
 			case <-ticker.C:
-				setHealthy(run(ctx, &cfg))
+				ok := run(ctx, &cfg)
+				if !ok {
+					slog.Warn("scheduled run failed, will retry on next tick", "interval_hours", cfg.ScheduleHours)
+				}
+				setHealthy(ok)
 			}
 		}
 	}
@@ -205,6 +224,8 @@ func setHealthy(ok bool) {
 func loadConfig() config {
 	hours, err := strconv.Atoi(getEnv("SCHEDULE_HOURS", "0"))
 	if err != nil {
+		slog.Warn("invalid SCHEDULE_HOURS, defaulting to one-shot mode",
+			"value", getEnv("SCHEDULE_HOURS", "0"), "error", err)
 		hours = 0
 	}
 	return config{
@@ -299,6 +320,11 @@ func run(ctx context.Context, cfg *config) bool {
 	slog.Info("step 3: building Plex library index")
 	plexByGUID, plexByTitleYear, plexByTitle := buildPlexIndex(ctx, client, cfg)
 
+	if len(plexByGUID) == 0 && len(plexByTitleYear) == 0 && len(plexByTitle) == 0 {
+		slog.Error("Plex library index is empty, cannot match stale items")
+		return false
+	}
+
 	// Step 4: Match stale items using GUID first, then title+year, then title
 	slog.Info("step 4: matching stale items")
 	matched, unmatched := matchStaleItems(cfg, stale, plexByGUID, plexByTitleYear, plexByTitle)
@@ -309,7 +335,7 @@ func run(ctx context.Context, cfg *config) bool {
 	// Step 6: Clear recently added
 	clearRecentlyAdded(ctx, client, cfg)
 
-	slog.Info("done")
+	slog.Info("done", "matched", len(matched), "unmatched", len(unmatched))
 	return true
 }
 
@@ -349,6 +375,11 @@ func collectTautulliItems(ctx context.Context, client *http.Client, cfg *config)
 		if total < 0 {
 			total = resp.Response.Data.RecordsFiltered
 			slog.Info("total history records", "count", total)
+			if total > maxTautulliRecords {
+				slog.Error("history record count exceeds sanity cap",
+					"count", total, "max", maxTautulliRecords)
+				return nil
+			}
 		}
 
 		rows := resp.Response.Data.Data
@@ -398,7 +429,7 @@ func processHistoryRow(row *historyItem, items map[string]tautulliEntry) {
 				Year: year, MediaType: mediaMovie, GUID: guid,
 			}
 		}
-	case "episode":
+	case mediaEpisode:
 		grandparentRatingKey := toInt(row.GrandparentRatingKey)
 		if grandparentRatingKey <= 0 {
 			return
@@ -474,9 +505,9 @@ func buildPlexIndex(ctx context.Context, client *http.Client, cfg *config) (
 				byGUID[g] = entry
 			}
 
-			t := strings.ToLower(strings.TrimSpace(li.Title))
-			byTitleYear[t+"|"+y] = entry
-			byTitle[t] = entry
+			normalizedTitle := strings.ToLower(strings.TrimSpace(li.Title))
+			byTitleYear[normalizedTitle+"|"+y] = entry
+			byTitle[normalizedTitle] = entry
 		}
 	}
 
@@ -495,6 +526,7 @@ func matchStaleItems(
 
 	for oldKey, item := range stale {
 		var newKey, method string
+		normalizedTitle := strings.ToLower(strings.TrimSpace(item.Title))
 
 		// Strategy 1: Match by GUID
 		if item.GUID != "" {
@@ -506,9 +538,8 @@ func matchStaleItems(
 
 		// Strategy 2: Match by title+year
 		if newKey == "" && cfg.FallbackTitleYear {
-			t := strings.ToLower(strings.TrimSpace(item.Title))
-			if t != "" {
-				if pe, ok := byTitleYear[t+"|"+item.Year]; ok && pe.RatingKey != oldKey {
+			if normalizedTitle != "" {
+				if pe, ok := byTitleYear[normalizedTitle+"|"+item.Year]; ok && pe.RatingKey != oldKey {
 					newKey = pe.RatingKey
 					method = methodTitleYear
 				}
@@ -517,9 +548,8 @@ func matchStaleItems(
 
 		// Strategy 3: Match by title only (require same media type to avoid movie/show collisions)
 		if newKey == "" && cfg.FallbackTitleOnly {
-			t := strings.ToLower(strings.TrimSpace(item.Title))
-			if t != "" {
-				if pe, ok := byTitle[t]; ok && pe.RatingKey != oldKey && pe.Type == item.MediaType {
+			if normalizedTitle != "" {
+				if pe, ok := byTitle[normalizedTitle]; ok && pe.RatingKey != oldKey && pe.Type == item.MediaType {
 					newKey = pe.RatingKey
 					method = fmt.Sprintf("title only (%s -> %s)", item.Year, pe.Year)
 				}
@@ -546,47 +576,44 @@ func matchStaleItems(
 // --- Remapping ---
 
 func applyRemappings(ctx context.Context, client *http.Client, cfg *config, matched []matchResult, unmatched []unmatchResult) {
-	if len(matched) > 0 {
-		slog.Info("remapping", "count", len(matched), "dry_run", cfg.DryRun)
-		for _, m := range matched {
-			slog.Info("remap",
-				"title", m.Title, "year", m.Year, "type", m.MediaType,
-				"old_key", m.OldKey, "new_key", m.NewKey, "method", m.Method)
-			if !cfg.DryRun {
-				if ctx.Err() != nil {
-					slog.Warn("remapping interrupted", "remaining", len(matched))
-					break
-				}
-				params := url.Values{
-					"old_rating_key": {m.OldKey},
-					"new_rating_key": {m.NewKey},
-					"media_type":     {m.MediaType},
-				}
-				body, err := tautulliAPI(ctx, client, cfg, "update_metadata_details", params)
-				if err != nil {
-					slog.Error("remap failed", "title", m.Title, "error", err)
-					continue
-				}
-				var resp struct {
-					Response struct {
-						Result  string `json:"result"`
-						Message string `json:"message"`
-					} `json:"response"`
-				}
-				if err := json.Unmarshal(body, &resp); err == nil && resp.Response.Result != resultSuccess {
-					slog.Error("remap API error", "title", m.Title, "message", resp.Response.Message)
-				}
-			}
-		}
-	} else {
-		slog.Info("no matches found for stale items")
-	}
-
 	if len(unmatched) > 0 {
 		slog.Info("unmatched items", "count", len(unmatched))
 		for _, u := range unmatched {
 			slog.Warn("no match",
 				"title", u.Title, "year", u.Year, "type", u.MediaType, "key", u.OldKey)
+		}
+	}
+
+	if len(matched) == 0 {
+		slog.Info("no matches found for stale items")
+		return
+	}
+
+	slog.Info("remapping", "count", len(matched), "dry_run", cfg.DryRun)
+	for i, m := range matched {
+		slog.Info("remap",
+			"title", m.Title, "year", m.Year, "type", m.MediaType,
+			"old_key", m.OldKey, "new_key", m.NewKey, "method", m.Method)
+		if cfg.DryRun {
+			continue
+		}
+		if ctx.Err() != nil {
+			slog.Warn("remapping interrupted", "remaining", len(matched)-i)
+			break
+		}
+		params := url.Values{
+			"old_rating_key": {m.OldKey},
+			"new_rating_key": {m.NewKey},
+			"media_type":     {m.MediaType},
+		}
+		body, err := tautulliAPI(ctx, client, cfg, "update_metadata_details", params)
+		if err != nil {
+			slog.Error("remap failed", "title", m.Title, "error", err)
+			continue
+		}
+		var resp tautulliResult
+		if err := json.Unmarshal(body, &resp); err == nil && resp.Response.Result != resultSuccess {
+			slog.Error("remap API error", "title", m.Title, "message", resp.Response.Message)
 		}
 	}
 }
@@ -602,12 +629,7 @@ func clearRecentlyAdded(ctx context.Context, client *http.Client, cfg *config) {
 		slog.Error("failed to clear recently added", "error", err)
 		return
 	}
-	var resp struct {
-		Response struct {
-			Result  string `json:"result"`
-			Message string `json:"message"`
-		} `json:"response"`
-	}
+	var resp tautulliResult
 	if err := json.Unmarshal(body, &resp); err == nil && resp.Response.Result != resultSuccess {
 		slog.Error("clear recently added failed", "message", resp.Response.Message)
 	}
@@ -699,10 +721,14 @@ func plexItemExists(ctx context.Context, client *http.Client, cfg *config, ratin
 	req.Header.Set("Accept", "application/json")
 	resp, err := client.Do(req)
 	if err != nil {
+		slog.Debug("plex check failed", "key", ratingKey, "error", sanitizeErr(err))
 		return false
 	}
 	defer resp.Body.Close()
 	drainBody(resp.Body)
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusNotFound {
+		slog.Warn("plex check unexpected status", "key", ratingKey, "status", resp.StatusCode)
+	}
 	return resp.StatusCode == http.StatusOK
 }
 

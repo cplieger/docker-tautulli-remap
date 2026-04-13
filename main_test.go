@@ -991,6 +991,19 @@ func TestCollectTautulliItems(t *testing.T) {
 			t.Errorf("expected nil on HTTP failure, got %v", items)
 		}
 	})
+
+	t.Run("exceeds max records cap returns nil", func(t *testing.T) {
+		cfg := tautulliServer(t, func(w http.ResponseWriter, _ *http.Request) {
+			w.Write([]byte(`{"response":{"result":"success","data":{
+				"recordsFiltered":500001,
+				"data":[{"rating_key":1,"title":"M","year":2020,"media_type":"movie","guid":""}]
+			}}}`))
+		})
+		items := collectTautulliItems(context.Background(), &http.Client{}, cfg)
+		if items != nil {
+			t.Errorf("collectTautulliItems: expected nil when records exceed cap, got %d items", len(items))
+		}
+	})
 }
 
 // --- Tests: findStaleKeys ---
@@ -1381,6 +1394,30 @@ func TestRun(t *testing.T) {
 		run(context.Background(), cfg)
 		if !backupCalled {
 			t.Error("backup_db should be called when not in dry run")
+		}
+	})
+
+	t.Run("empty plex index returns false", func(t *testing.T) {
+		cfg := tautulliServer(t, func(w http.ResponseWriter, r *http.Request) {
+			cmd := r.URL.Query().Get("cmd")
+			switch {
+			case cmd == "get_history":
+				w.Write([]byte(`{"response":{"result":"success","data":{
+					"recordsFiltered":1,
+					"data":[{"rating_key":100,"title":"Movie","year":2020,"media_type":"movie","guid":""}]
+				}}}`))
+			case strings.HasSuffix(r.URL.Path, "/library/metadata/100"):
+				w.WriteHeader(http.StatusNotFound)
+			case strings.HasSuffix(r.URL.Path, "/library/sections"):
+				w.Write([]byte(`{"MediaContainer":{"Directory":[]}}`))
+			default:
+				w.Write([]byte(`{}`))
+			}
+		})
+		cfg.DryRun = true
+		ok := run(context.Background(), cfg)
+		if ok {
+			t.Error("run: expected false when Plex library index is empty")
 		}
 	})
 }
@@ -2236,4 +2273,133 @@ func TestTautulliAPI_error_does_not_leak_apikey(t *testing.T) {
 	if strings.Contains(err.Error(), "supersecretkey123") {
 		t.Errorf("error message leaked API key: %s", err.Error())
 	}
+}
+
+// TestMatchStaleItems_partition_property verifies that every stale item
+// ends up in exactly one of matched or unmatched (no item lost or duplicated).
+func TestMatchStaleItems_partition_property(t *testing.T) {
+	rapid.Check(t, func(t *rapid.T) {
+		n := rapid.IntRange(0, 10).Draw(t, "n")
+		stale := map[string]tautulliEntry{}
+		byGUID := map[string]plexEntry{}
+		byTitleYear := map[string]plexEntry{}
+		byTitle := map[string]plexEntry{}
+
+		for i := range n {
+			key := strconv.Itoa(100 + i)
+			title := rapid.StringMatching(`[A-Za-z ]{1,20}`).Draw(t, fmt.Sprintf("title_%d", i))
+			year := strconv.Itoa(rapid.IntRange(1990, 2025).Draw(t, fmt.Sprintf("year_%d", i)))
+			mediaType := rapid.SampledFrom([]string{"movie", "show"}).Draw(t, fmt.Sprintf("type_%d", i))
+			guid := ""
+			if rapid.Bool().Draw(t, fmt.Sprintf("has_guid_%d", i)) {
+				guid = "imdb://tt" + strconv.Itoa(rapid.IntRange(1000000, 9999999).Draw(t, fmt.Sprintf("guid_%d", i)))
+			}
+			stale[key] = tautulliEntry{
+				RatingKey: key, Title: title, Year: year,
+				MediaType: mediaType, GUID: guid,
+			}
+
+			// Randomly populate lookup maps
+			if guid != "" && rapid.Bool().Draw(t, fmt.Sprintf("in_guid_map_%d", i)) {
+				newKey := strconv.Itoa(200 + i)
+				byGUID[guid] = plexEntry{RatingKey: newKey, Title: title, Year: year, Type: mediaType}
+			}
+			t2 := strings.ToLower(strings.TrimSpace(title))
+			if t2 != "" && rapid.Bool().Draw(t, fmt.Sprintf("in_ty_map_%d", i)) {
+				newKey := strconv.Itoa(300 + i)
+				byTitleYear[t2+"|"+year] = plexEntry{RatingKey: newKey, Title: title, Year: year, Type: mediaType}
+			}
+			if t2 != "" && rapid.Bool().Draw(t, fmt.Sprintf("in_t_map_%d", i)) {
+				newKey := strconv.Itoa(400 + i)
+				byTitle[t2] = plexEntry{RatingKey: newKey, Title: title, Year: year, Type: mediaType}
+			}
+		}
+
+		cfg := &config{FallbackTitleYear: true, FallbackTitleOnly: true}
+		matched, unmatched := matchStaleItems(cfg, stale, byGUID, byTitleYear, byTitle)
+
+		// Partition property: every stale key appears exactly once
+		seen := map[string]bool{}
+		for _, m := range matched {
+			if seen[m.OldKey] {
+				t.Errorf("matchStaleItems: duplicate matched key %s", m.OldKey)
+			}
+			seen[m.OldKey] = true
+		}
+		for _, u := range unmatched {
+			if seen[u.OldKey] {
+				t.Errorf("matchStaleItems: key %s in both matched and unmatched", u.OldKey)
+			}
+			seen[u.OldKey] = true
+		}
+		if len(seen) != len(stale) {
+			t.Errorf("matchStaleItems: partition has %d items, stale has %d", len(seen), len(stale))
+		}
+
+		// No self-remap: matched items never have OldKey == NewKey
+		for _, m := range matched {
+			if m.OldKey == m.NewKey {
+				t.Errorf("matchStaleItems: self-remap OldKey == NewKey == %s", m.OldKey)
+			}
+		}
+
+		// GUID method only when GUID is non-empty
+		for _, m := range matched {
+			if m.Method == methodGUID {
+				entry := stale[m.OldKey]
+				if entry.GUID == "" {
+					t.Errorf("matchStaleItems: GUID method reported for empty GUID, key %s", m.OldKey)
+				}
+			}
+		}
+	})
+}
+
+// TestProcessHistoryRow_never_removes_entries verifies that processHistoryRow
+// only adds entries to the map, never removes or overwrites existing ones.
+func TestProcessHistoryRow_never_removes_entries(t *testing.T) {
+	rapid.Check(t, func(t *rapid.T) {
+		items := map[string]tautulliEntry{}
+
+		// Pre-populate with some entries
+		nExisting := rapid.IntRange(0, 5).Draw(t, "n_existing")
+		for i := range nExisting {
+			key := strconv.Itoa(i + 1)
+			items[key] = tautulliEntry{
+				RatingKey: key, Title: fmt.Sprintf("Existing %d", i),
+				Year: "2020", MediaType: "movie",
+			}
+		}
+		beforeLen := len(items)
+		beforeKeys := map[string]string{}
+		for k, v := range items {
+			beforeKeys[k] = v.Title
+		}
+
+		// Generate a random history row
+		mediaType := rapid.SampledFrom([]string{"movie", "episode", "track", ""}).Draw(t, "media_type")
+		row := &historyItem{
+			RatingKey:            rapid.SampledFrom([]any{float64(rapid.IntRange(-1, 10).Draw(t, "rk")), "abc", nil}).Draw(t, "rating_key"),
+			GrandparentRatingKey: rapid.SampledFrom([]any{float64(rapid.IntRange(-1, 10).Draw(t, "grk")), "xyz", nil}).Draw(t, "gp_rating_key"),
+			Title:                rapid.StringMatching(`[A-Za-z ]{0,15}`).Draw(t, "title"),
+			GrandparentTitle:     rapid.StringMatching(`[A-Za-z ]{0,15}`).Draw(t, "gp_title"),
+			Year:                 rapid.SampledFrom([]any{float64(2020), "2021", nil}).Draw(t, "year"),
+			MediaType:            mediaType,
+			GUID:                 rapid.SampledFrom([]string{"", "imdb://tt1234567", "plex://episode/abc", "local://123"}).Draw(t, "guid"),
+		}
+
+		processHistoryRow(row, items)
+
+		// Monotonic: map never shrinks
+		if len(items) < beforeLen {
+			t.Errorf("processHistoryRow: map shrank from %d to %d", beforeLen, len(items))
+		}
+
+		// Existing entries preserved
+		for k, title := range beforeKeys {
+			if items[k].Title != title {
+				t.Errorf("processHistoryRow: existing entry %q changed from %q to %q", k, title, items[k].Title)
+			}
+		}
+	})
 }
