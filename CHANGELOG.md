@@ -1,5 +1,38 @@
 # Changelog
 
+## 2026.05.18-d62cfc6 (2026-05-21)
+
+### Added
+
+- Improve Go build to support multiple source files
+- Add file-based healthcheck for distroless containers
+
+### Fixed
+
+- Lift GUID prefix strings into typed constants
+- Improve error handling and memory safety
+- Refactor health probe to enable unit testing
+- Refactor(tautulli-remap): replace GUID prefix strings with named constants
+
+### Security
+
+- Harden security, standardize resource limits, and move healthcheck to Dockerfile
+
+### Changed
+
+- Extract plex index, relocate interfaces, type JSON boundary
+- Refactor(tautulli-remap): decompose monolith into internal packages
+- Simplify tmpfs comment
+- Refactor compose (no user-visible change)
+- Harden container, improve observability, decouple health marker
+
+### Dependencies
+
+- Update gcr.io/distroless/static-debian13:nonroot docker digest to 963fa6c (#302)
+- Update golang:1.26-alpine docker digest to 91eda97 (#261)
+- Update third-party dependencies
+- fix(deps): update module pgregory.net/rapid to v1.3.0 (#232)
+
 ## 2026.04.16-3618180 (2026-04-17)
 
 ### Dependencies

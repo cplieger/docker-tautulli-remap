@@ -56,28 +56,17 @@ services:
     container_name: tautulli-remap
     restart: unless-stopped
     user: "1000:1000"  # match your host user
-    mem_limit: 128m
 
     environment:
       TZ: "Europe/Paris"
-      TAUTULLI_URL: "\\http://tautulli:8181"
+      TAUTULLI_URL: "http://tautulli:8181"
       TAUTULLI_APIKEY: "your-tautulli-apikey"
-      PLEX_URL: "\\http://plex:32400"
+      PLEX_URL: "http://plex:32400"
       PLEX_TOKEN: "your-plex-token"
       SCHEDULE_HOURS: "24"  # 0 = run once and exit
       FALLBACK_TITLE_YEAR: "true"
       FALLBACK_TITLE_ONLY: "false"  # risk of false matches
       DRY_RUN: "true"  # set to false to apply changes
-
-    healthcheck:
-      test:
-        - CMD
-        - /tautulli-remap
-        - health
-      interval: 30s
-      timeout: 5s
-      retries: 3
-      start_period: 15s
 ```
 
 ## Deployment
@@ -87,9 +76,10 @@ services:
 2. Set `TAUTULLI_APIKEY` (found in Tautulli → Settings → Web
    Interface → API Key) and `PLEX_TOKEN`
    (see [Plex support](https://support.plex.tv/articles/204059436)).
-3. Start with `DRY_RUN: "true"` (the default) to see what would
-   change without applying anything. Check the container logs.
-4. Once satisfied, set `DRY_RUN: "false"` to apply the remaps.
+3. Set `DRY_RUN: "true"` on the first run to see what would change
+   without applying anything, then check the container logs.
+4. Once satisfied, set `DRY_RUN: "false"` (the compose default) to
+   apply the remaps.
 5. `FALLBACK_TITLE_YEAR` and `FALLBACK_TITLE_ONLY` control how
    aggressively the tool matches when GUID matching fails.
    Title-only matching risks false positives on common titles.
@@ -101,9 +91,9 @@ For additional configuration options not covered by this image's environment var
 | Variable | Description | Default | Required |
 |----------|-------------|---------|----------|
 | `TZ` | Container timezone | `Europe/Paris` | No |
-| `TAUTULLI_URL` | Tautulli instance URL (Docker DNS name or LAN IP) | `\http://tautulli:8181` | No |
+| `TAUTULLI_URL` | Tautulli instance URL (Docker DNS name or LAN IP) | `http://tautulli:8181` | No |
 | `TAUTULLI_APIKEY` | Tautulli API key (Settings → Web Interface → API Key) | - | Yes |
-| `PLEX_URL` | Plex Media Server URL (Docker DNS name or LAN IP) | `\http://plex:32400` | No |
+| `PLEX_URL` | Plex Media Server URL (Docker DNS name or LAN IP) | `http://plex:32400` | No |
 | `PLEX_TOKEN` | Plex authentication token (see Plex support article) | - | Yes |
 | `SCHEDULE_HOURS` | Hours between remap runs (0 = run once and exit) | `24` | No |
 | `FALLBACK_TITLE_YEAR` | Try title+year matching when GUID match fails | `true` | No |
@@ -145,10 +135,10 @@ docker inspect --format='{{json .State.Health.Log}}' tautulli-remap | python3 -m
 
 | Metric | Value |
 |--------|-------|
-| [Test Coverage](https://go.dev/blog/cover) | 91.4% |
-| Tests | 164 |
-| [Cyclomatic Complexity](https://en.wikipedia.org/wiki/Cyclomatic_complexity) (avg) | 6.3 |
-| [Cognitive Complexity](https://www.sonarsource.com/docs/CognitiveComplexity.pdf) (avg) | 8.8 |
+| [Test Coverage](https://go.dev/blog/cover) | 82.5% |
+| Tests | 181 |
+| [Cyclomatic Complexity](https://en.wikipedia.org/wiki/Cyclomatic_complexity) (avg) | 5.0 |
+| [Cognitive Complexity](https://www.sonarsource.com/docs/CognitiveComplexity.pdf) (avg) | 6.3 |
 | [Mutation Efficacy](https://en.wikipedia.org/wiki/Mutation_testing) | 77.0% (59 runs) |
 | Test Framework | Property-based ([rapid](https://github.com/flyingmutant/rapid)) + table-driven |
 
@@ -180,9 +170,12 @@ healthchecks in production.
 | [hadolint](https://github.com/hadolint/hadolint) | Clean |
 
 No network listener; connects outbound to Tautulli and Plex
-only. `DRY_RUN=true` by default prevents accidental changes.
+only. Set `DRY_RUN=true` on first run to preview changes safely.
 API tokens are never logged. Stdlib-only (zero external deps).
-Runs as `nonroot` on a distroless base image with no shell.
+Runs as `nonroot` on a distroless base image with no shell,
+under the hardened compose profile
+(`read_only: true`, `cap_drop: [ALL]`,
+`no-new-privileges:true`, 16 MB tmpfs for `/tmp`).
 
 **Details for advanced users:** All HTTP clients use explicit
 timeouts (2 min client, 30s per-request). Response bodies capped
