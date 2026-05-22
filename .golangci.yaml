@@ -71,6 +71,3 @@ linters:
           - usetesting
           - noctx
           - revive
-      - text: "directive.*is unused"
-        linters:
-          - nolintlint
