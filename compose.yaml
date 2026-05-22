@@ -1,6 +1,6 @@
 services:
   tautulli-remap:
-    image: ghcr.io/cplieger/tautulli-remap:latest@sha256:e7144ff1fa412662c66d7c9db0292e179047057b3fbe2ab77cf972898717f3f7
+    image: ghcr.io/cplieger/tautulli-remap:latest
     container_name: tautulli-remap
     restart: unless-stopped
     user: "1000:1000"  # match your host user
