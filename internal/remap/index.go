@@ -85,7 +85,7 @@ func BuildPlexIndex(ctx context.Context, plex PlexLibraryFetcher, parallelism in
 		})
 	}
 
-	_ = g.Wait() //nolint:errcheck // goroutines always return nil
+	_ = g.Wait()
 
 	return byGUID, byTitleYear, byTitle
 }

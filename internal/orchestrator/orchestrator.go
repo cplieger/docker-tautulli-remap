@@ -297,7 +297,7 @@ func (o *Orchestrator) FindStaleKeys(ctx context.Context, items map[string]remap
 		})
 	}
 
-	_ = g.Wait() //nolint:errcheck // goroutines always return nil
+	_ = g.Wait()
 
 	slog.Info("stale key check complete", "checked", len(items), "stale", len(stale))
 	return stale
