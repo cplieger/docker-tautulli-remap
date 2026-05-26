@@ -6,48 +6,29 @@
 ![Platforms](https://img.shields.io/badge/platforms-amd64%20%7C%20arm64-blue)
 ![base: Distroless](https://img.shields.io/badge/base-Distroless_nonroot-4285F4?logo=google)
 
-Tautulli rating key remapper for Plex library changes
+Fix broken Tautulli watch history after reorganizing your Plex libraries.
 
-## Overview
+## What it does
 
-Periodically queries Tautulli's API for history entries with stale
-rating keys (entries pointing to items that no longer exist in Plex).
-For each stale entry, it attempts to find the correct current rating
-key in Plex using three matching strategies: GUID match (primary),
-title+year match (fallback), and title-only with media type guard
-(optional). Supports dry-run mode for safe testing.
+When you reorganize your Plex libraries (move files, re-add content, change folder structure), Plex assigns new internal IDs to your media. This breaks Tautulli's watch history — it can no longer link history entries to the right items. This tool automatically finds the correct new IDs and updates Tautulli's database, preserving your watch history and statistics.
 
-**Example use case:** After reorganizing Plex libraries, moving media
-between folders, or re-adding content, Tautulli's history entries
-break because Plex assigns new rating keys. This tool automatically
-finds the correct new keys and updates Tautulli's database, preserving
-your watch history and statistics.
+For each stale entry, it attempts to find the correct current rating key in Plex using three matching strategies:
 
-This is a distroless, rootless container — it runs as `nonroot` on
-`gcr.io/distroless/static` with no shell or package manager. It has
-zero external Go dependencies (stdlib-only).
+1. **GUID match** (primary) — matches on Plex's globally unique identifier, the most reliable method.
+2. **Title+year match** (fallback) — when GUID matching fails, tries matching by title and release year.
+3. **Title-only with media type guard** (optional) — last resort matching by title alone, restricted to the same media type to reduce false positives.
 
+### Why this design
 
-## Container Registries
+- **Runs on a schedule or once-and-exit** — set `SCHEDULE_HOURS=0` for a single run, or any positive value for periodic remapping.
+- **Dry-run by default for safety** — no changes are applied until you explicitly set `DRY_RUN=false`, so you can always preview first.
+- **Three matching strategies with increasing aggressiveness** — starts with the safest (GUID), falls back to title+year, and optionally title-only, giving you control over the risk/coverage tradeoff.
+- **Stdlib-only, zero external dependencies** — pure Go with no third-party modules, minimizing supply-chain risk.
+- **Distroless and rootless** — runs as `nonroot` on `gcr.io/distroless/static` with no shell or package manager.
 
-This image is published to both GHCR and Docker Hub:
+## Quick start
 
-| Registry | Image |
-|----------|-------|
-| GHCR | `ghcr.io/cplieger/tautulli-remap` |
-| Docker Hub | `docker.io/cplieger/tautulli-remap` |
-
-```bash
-# Pull from GHCR
-docker pull ghcr.io/cplieger/tautulli-remap:latest
-
-# Pull from Docker Hub
-docker pull cplieger/tautulli-remap:latest
-```
-
-Both registries receive identical images and tags. Use whichever you prefer.
-
-## Quick Start
+Images are published to both `ghcr.io/cplieger/tautulli-remap` and `docker.io/cplieger/tautulli-remap` — use whichever you prefer.
 
 ```yaml
 services:
@@ -69,24 +50,7 @@ services:
       DRY_RUN: "true"  # set to false to apply changes
 ```
 
-## Deployment
-
-1. Set `TAUTULLI_URL` and `PLEX_URL` to your instances (Docker DNS
-   names like `http://tautulli:8181` work if on the same network).
-2. Set `TAUTULLI_APIKEY` (found in Tautulli → Settings → Web
-   Interface → API Key) and `PLEX_TOKEN`
-   (see [Plex support](https://support.plex.tv/articles/204059436)).
-3. Set `DRY_RUN: "true"` on the first run to see what would change
-   without applying anything, then check the container logs.
-4. Once satisfied, set `DRY_RUN: "false"` (the compose default) to
-   apply the remaps.
-5. `FALLBACK_TITLE_YEAR` and `FALLBACK_TITLE_ONLY` control how
-   aggressively the tool matches when GUID matching fails.
-   Title-only matching risks false positives on common titles.
-
-For additional configuration options not covered by this image's environment variables, refer to the [Tautulli documentation](https://github.com/Tautulli/Tautulli/wiki/Tautulli-API-Reference).
-
-## Environment Variables
+## Configuration reference
 
 | Variable | Description | Default | Required |
 |----------|-------------|---------|----------|
@@ -100,38 +64,11 @@ For additional configuration options not covered by this image's environment var
 | `FALLBACK_TITLE_ONLY` | Try title-only matching as last resort (risk of false matches) | `false` | No |
 | `DRY_RUN` | Log what would change without applying — set to false to apply | `true` | No |
 
+## Healthcheck
 
-## Docker Healthcheck
+The container includes a built-in Docker healthcheck via the `/tautulli-remap health` subcommand. After each scheduled run, the main process creates or removes a marker file at `/tmp/.healthy`; the health subcommand checks for this file's existence. The container reports unhealthy when Tautulli or Plex APIs are unreachable, return errors, or the remap logic fails — it recovers automatically on the next successful run (including runs where nothing needs remapping).
 
-The container includes a built-in Docker healthcheck. After each scheduled
-run, the main process creates or removes a marker file at `/tmp/.healthy`.
-The `health` subcommand checks for this file's existence.
-
-**When it becomes unhealthy:**
-- Tautulli API is unreachable (wrong URL, container down, network issue)
-- Plex API is unreachable (wrong URL, invalid token, container down)
-- API returns errors (invalid API key, rate limiting)
-
-**When it recovers:**
-- The next successful scheduled run (where both APIs respond and the remap logic completes) recreates the marker file. No restart required.
-- A run where "nothing to remap" is found still counts as successful.
-
-**On first boot:** The container runs immediately, then schedules
-subsequent runs. If Tautulli or Plex aren't ready yet (e.g. still
-starting), the first run fails and the container reports unhealthy
-until the next scheduled run succeeds. Make use of depends_on to solve this.
-
-To check health manually:
-```bash
-docker inspect --format='{{json .State.Health.Log}}' tautulli-remap | python3 -m json.tool
-```
-
-| Type | Command | Meaning |
-|------|---------|---------|
-| Docker | `/tautulli-remap health` | Exit 0 = last run completed successfully |
-
-
-## Code Quality
+## Code quality
 
 | Metric | Value |
 |--------|-------|
@@ -155,7 +92,7 @@ Not tested: `main()` (signal handling and scheduler loop) — a thin
 wrapper around the tested core logic, validated by Docker
 healthchecks in production.
 
-## Security Review
+## Security
 
 **No vulnerabilities found.** All scans clean across 8 tools.
 
@@ -195,19 +132,15 @@ All dependencies are updated automatically via [Renovate](https://github.com/ren
 | golang | `1.26-alpine` | [Go](https://hub.docker.com/_/golang) |
 | gcr.io/distroless/static-debian13 | `nonroot` | [Distroless](https://github.com/GoogleContainerTools/distroless) |
 
-## Design Principles
-
-- **Always up to date**: Base images, packages, and libraries are updated automatically via Renovate. Unlike many community Docker images that ship outdated or abandoned dependencies, these images receive continuous updates.
-- **Minimal attack surface**: When possible, pure Go apps use `gcr.io/distroless/static:nonroot` (no shell, no package manager, runs as non-root). Apps requiring system packages use Alpine with the minimum necessary privileges.
-- **Digest-pinned**: Every `FROM` instruction pins a SHA256 digest. All GitHub Actions are digest-pinned.
-- **Multi-platform**: Built for `linux/amd64` and `linux/arm64`.
-- **Healthchecks**: Every container includes a Docker healthcheck.
-- **Provenance**: Build provenance is attested via GitHub Actions, verifiable with `gh attestation verify`.
-
 ## Credits
 
 This is an original tool that builds upon [Tautulli](https://github.com/Tautulli/Tautulli).
 Inspired by [SwiftPanda16's Tautulli rating key update script](https://gist.github.com/JonnyWong16/f554f407832076919dc6864a78432db2).
+
+## Contributing
+
+Issues and pull requests are welcome. Please open an issue first for
+larger changes so the approach can be discussed before implementation.
 
 ## Disclaimer
 
