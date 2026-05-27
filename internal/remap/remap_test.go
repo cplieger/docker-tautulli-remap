@@ -401,9 +401,9 @@ func TestMatchStaleItems(t *testing.T) {
 		byGUID      map[string]PlexEntry
 		byTitleYear map[string]PlexEntry
 		byTitle     map[string]PlexEntry
+		checks      []check
 		enableTY    bool
 		enableTO    bool
-		checks      []check
 	}{
 		{
 			name:        "guid match takes priority over title+year",
