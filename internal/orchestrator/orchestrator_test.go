@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -428,7 +429,7 @@ func TestBuildPlexIndex_SkipsNonMovieShowSections(t *testing.T) {
 
 func TestBuildPlexIndex_CancelBetweenSections(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
-	sectionAllHits := 0
+	var sectionAllHits atomic.Int32
 	cfg := testServer(t, func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case strings.HasSuffix(r.URL.Path, "/library/sections"):
@@ -437,15 +438,15 @@ func TestBuildPlexIndex_CancelBetweenSections(t *testing.T) {
 				{"key":"2","title":"TV","type":"show"}
 			]}}`))
 		case strings.Contains(r.URL.Path, "/sections/"):
-			sectionAllHits++
+			sectionAllHits.Add(1)
 			cancel()
 			w.Write([]byte(`{"MediaContainer":{"Metadata":[]}}`))
 		}
 	})
 	pc := plex.New(cfg.PlexURL, cfg.PlexToken, &http.Client{})
-	byGUID, byTitleYear, byTitle := remap.BuildPlexIndex(ctx, pc, 8)
-	if sectionAllHits != 1 {
-		t.Errorf("expected 1 section fetch before cancel, got %d", sectionAllHits)
+	byGUID, byTitleYear, byTitle := remap.BuildPlexIndex(ctx, pc, 1)
+	if got := sectionAllHits.Load(); got != 1 {
+		t.Errorf("expected 1 section fetch before cancel, got %d", got)
 	}
 	if len(byGUID) != 0 || len(byTitleYear) != 0 || len(byTitle) != 0 {
 		t.Errorf("expected empty indexes on early cancel")
