@@ -752,7 +752,25 @@ func FuzzFlexIntUnmarshal(f *testing.F) {
 	f.Add([]byte(`99999999999999999`))
 	f.Fuzz(func(t *testing.T, data []byte) {
 		var fi FlexInt
-		_ = fi.UnmarshalJSON(data)
+		if err := fi.UnmarshalJSON(data); err != nil {
+			return
+		}
+		// Round-trip stability for values within float64 safe integer range (±2^53).
+		const maxSafe = 1 << 53
+		v := int(fi)
+		if v > -maxSafe && v < maxSafe {
+			out, err := json.Marshal(fi)
+			if err != nil {
+				t.Fatalf("marshal failed: %v", err)
+			}
+			var fi2 FlexInt
+			if err := fi2.UnmarshalJSON(out); err != nil {
+				t.Fatalf("re-unmarshal failed: %v", err)
+			}
+			if fi != fi2 {
+				t.Errorf("round-trip mismatch: %d != %d (marshaled as %s)", fi, fi2, out)
+			}
+		}
 	})
 }
 
@@ -768,12 +786,106 @@ func FuzzNormalizeGUID(f *testing.F) {
 	f.Add("custom://something")
 	f.Fuzz(func(t *testing.T, guid string) {
 		result := NormalizeGUID(guid)
+		if result == "" {
+			return
+		}
 		// Idempotency check
-		if result != "" {
-			second := NormalizeGUID(result)
-			if second != result {
-				t.Errorf("not idempotent: NormalizeGUID(%q)=%q, NormalizeGUID(%q)=%q", guid, result, result, second)
+		second := NormalizeGUID(result)
+		if second != result {
+			t.Errorf("not idempotent: NormalizeGUID(%q)=%q, NormalizeGUID(%q)=%q", guid, result, result, second)
+		}
+		// Canonical prefix check
+		canonicalPrefixes := []string{"imdb://", "tmdb://", "tvdb://", "plex://", "mbid://"}
+		hasCanonical := false
+		for _, cp := range canonicalPrefixes {
+			if strings.HasPrefix(result, cp) {
+				hasCanonical = true
+				break
 			}
+		}
+		if !hasCanonical {
+			t.Errorf("NormalizeGUID(%q) = %q does not start with a canonical prefix", guid, result)
+		}
+	})
+}
+
+func FuzzProcessHistoryRow(f *testing.F) {
+	f.Add([]byte(`{"rating_key":42,"title":"Test","year":2020,"media_type":"movie","guid":"imdb://tt1234567"}`))
+	f.Add([]byte(`{"rating_key":"99","grandparent_rating_key":"50","title":"Ep","grandparent_title":"Show","year":2021,"media_type":"episode","guid":"tvdb://271557"}`))
+	f.Add([]byte(`{}`))
+	f.Add([]byte(`null`))
+	f.Add([]byte(`{"rating_key":0,"title":"","year":0,"media_type":"track"}`))
+	f.Fuzz(func(t *testing.T, data []byte) {
+		var row HistoryItem
+		if err := json.Unmarshal(data, &row); err != nil {
+			return
+		}
+		items := map[string]TautulliEntry{}
+		// Must never panic
+		ProcessHistoryRow(&row, items)
+		// Validate outputs
+		canonicalPrefixes := []string{"imdb://", "tmdb://", "tvdb://", "plex://", "mbid://"}
+		for key, entry := range items {
+			// RatingKey must be non-zero positive
+			rk, err := strconv.Atoi(key)
+			if err != nil || rk <= 0 {
+				t.Errorf("invalid rating key %q in output", key)
+			}
+			if entry.RatingKey != key {
+				t.Errorf("entry.RatingKey=%q != map key=%q", entry.RatingKey, key)
+			}
+			// MediaType must be Movie or Show
+			if entry.MediaType != Movie && entry.MediaType != Show {
+				t.Errorf("unexpected MediaType %q for key %s", entry.MediaType, key)
+			}
+			// GUID if non-empty must start with canonical prefix
+			if entry.GUID != "" {
+				hasPrefix := false
+				for _, cp := range canonicalPrefixes {
+					if strings.HasPrefix(entry.GUID, cp) {
+						hasPrefix = true
+						break
+					}
+				}
+				if !hasPrefix {
+					t.Errorf("entry GUID %q does not start with canonical prefix", entry.GUID)
+				}
+			}
+		}
+	})
+}
+
+func FuzzMatchOne(f *testing.F) {
+	f.Add("Test Movie", "imdb://tt1234567", "movie")
+	f.Add("", "", "")
+	f.Add("Show Title", "tvdb://12345", "show")
+	f.Fuzz(func(t *testing.T, title, guid, mediaType string) {
+		mt := ParseMediaType(mediaType)
+		item := &TautulliEntry{
+			RatingKey: "100",
+			Title:     title,
+			Year:      "2020",
+			MediaType: mt,
+			GUID:      guid,
+		}
+		byGUID := map[string]PlexEntry{
+			"imdb://tt1234567": {RatingKey: "200", Title: "M", Year: "2020", Type: Movie},
+			"tvdb://12345":     {RatingKey: "300", Title: "S", Year: "2021", Type: Show},
+		}
+		byTitleYear := map[string]PlexEntry{
+			"test movie|2020": {RatingKey: "400", Title: "Test Movie", Year: "2020", Type: Movie},
+		}
+		byTitle := map[string]PlexEntry{
+			"show title": {RatingKey: "500", Title: "Show Title", Year: "2021", Type: Show},
+		}
+		validKeys := map[string]bool{"200": true, "300": true, "400": true, "500": true}
+
+		// Must never panic
+		newKey, _ := MatchOne(item, "100", byGUID, byTitleYear, byTitle, true, true)
+
+		// Result must be either empty or from the input maps
+		if newKey != "" && !validKeys[newKey] {
+			t.Errorf("MatchOne returned key %q which is not in the input maps", newKey)
 		}
 	})
 }
