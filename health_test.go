@@ -52,14 +52,15 @@ func TestHealthMarker_DegradedMode(t *testing.T) {
 	}
 
 	path := filepath.Join(dir, ".healthy")
-	m := newHealthMarker(path)
 
-	if !m.degraded {
-		// Some environments (root, permissive filesystems like Windows
-		// or containers) allow writes through 0500; skip rather than
-		// fail in those cases.
+	// Some environments (root, permissive filesystems like Windows
+	// or containers) allow writes through 0500; skip rather than
+	// fail in those cases.
+	if probeHealthDir(path) == nil {
 		t.Skip("test environment bypasses directory mode; skipping")
 	}
+
+	m := newHealthMarker(path)
 
 	m.Set(true)
 	if _, err := os.Stat(path); !os.IsNotExist(err) {
