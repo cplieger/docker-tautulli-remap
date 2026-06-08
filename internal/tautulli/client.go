@@ -3,7 +3,6 @@ package tautulli
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -12,6 +11,7 @@ import (
 	"net/url"
 	"time"
 
+	"github.com/cplieger/httpx"
 	"github.com/cplieger/tautulli-remap/internal/httputil"
 	"github.com/cplieger/tautulli-remap/internal/remap"
 )
@@ -28,6 +28,7 @@ const defaultRetryDelayUnit = 5 * time.Second
 // Client is the concrete Tautulli API client.
 type Client struct {
 	httpClient *http.Client
+	logger     *slog.Logger
 	url        string
 	apiKey     string
 
@@ -63,16 +64,28 @@ type HistoryPage struct {
 
 // New creates a new Tautulli client.
 func New(tautulliURL, apiKey string, httpClient *http.Client) *Client {
-	return &Client{httpClient: httpClient, url: tautulliURL, apiKey: apiKey}
+	return &Client{
+		httpClient: httpClient,
+		logger:     redactedLogger(apiKey),
+		url:        tautulliURL,
+		apiKey:     apiKey,
+	}
+}
+
+// requestURL builds the Tautulli API v2 URL for cmd with the api key and any
+// extra query params. The api key rides in the query string, so error messages
+// derived from this URL must be redacted (see API / APIWithRetry).
+func (c *Client) requestURL(cmd string, extra url.Values) string {
+	params := url.Values{"cmd": {cmd}, "apikey": {c.apiKey}}
+	maps.Copy(params, extra)
+	return c.url + "/api/v2?" + params.Encode()
 }
 
 func (c *Client) API(ctx context.Context, cmd string, extra url.Values) ([]byte, error) {
-	params := url.Values{"cmd": {cmd}, "apikey": {c.apiKey}}
-	maps.Copy(params, extra)
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet,
-		c.url+"/api/v2?"+params.Encode(), http.NoBody)
+		c.requestURL(cmd, extra), http.NoBody)
 	if err != nil {
 		return nil, fmt.Errorf("tautulli %s: %w", cmd, httputil.SanitizeErr(err))
 	}
@@ -83,36 +96,28 @@ func (c *Client) API(ctx context.Context, cmd string, extra url.Values) ([]byte,
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		httputil.DrainBody(resp.Body)
-		err := fmt.Errorf("tautulli %s: HTTP %d", cmd, resp.StatusCode)
-		if resp.StatusCode >= 400 && resp.StatusCode < 500 && resp.StatusCode != http.StatusTooManyRequests {
-			return nil, &remap.NonRetryableError{Err: err}
-		}
-		return nil, err
+		return nil, fmt.Errorf("tautulli %s: HTTP %d", cmd, resp.StatusCode)
 	}
 	return io.ReadAll(io.LimitReader(resp.Body, maxTautulliBody))
 }
 
+// APIWithRetry performs a GET against the Tautulli API with bounded
+// exponential-backoff retry on 429/5xx (honoring Retry-After) via
+// github.com/cplieger/httpx. 4xx-other-than-429 and non-transient transport
+// errors are returned immediately. The api key (carried in the query string)
+// is redacted from any returned error. Used for read commands; mutating
+// commands call API directly so they are never retried.
 func (c *Client) APIWithRetry(ctx context.Context, cmd string, extra url.Values) ([]byte, error) {
-	var lastErr error
-	for attempt := range 3 {
-		if attempt > 0 {
-			delay := time.Duration(attempt) * c.retryDelayUnit()
-			slog.Warn("retrying Tautulli API", "cmd", cmd, "attempt", attempt+1, "delay", delay)
-			if err := httputil.SleepCtx(ctx, delay); err != nil {
-				return nil, err
-			}
-		}
-		body, err := c.API(ctx, cmd, extra)
-		if err == nil {
-			return body, nil
-		}
-		lastErr = err
-		var nr *remap.NonRetryableError
-		if errors.As(err, &nr) {
-			return nil, err
-		}
+	body, err := httpx.Retry(ctx, c.httpClient, c.requestURL(cmd, extra),
+		httpx.WithMaxAttempts(3),
+		httpx.WithBaseDelay(c.retryDelayUnit()),
+		httpx.WithMaxBodyBytes(maxTautulliBody),
+		httpx.WithLogger(c.logger),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("tautulli %s: %w", cmd, httpx.RedactSecret(err, c.apiKey))
 	}
-	return nil, lastErr
+	return body, nil
 }
 
 func (c *Client) GetHistory(ctx context.Context, params url.Values) (*HistoryPage, error) {

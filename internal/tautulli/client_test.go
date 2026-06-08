@@ -1,6 +1,7 @@
 package tautulli
 
 import (
+	"bytes"
 	"context"
 	"net/http"
 	"net/http/httptest"
@@ -290,5 +291,48 @@ func TestGetHistory_APIError(t *testing.T) {
 	_, err := c.GetHistory(context.Background(), nil)
 	if err == nil {
 		t.Fatal("expected error for non-success result")
+	}
+}
+
+// TestAPIWithRetry_ErrorDoesNotLeakAPIKey guards the httpx adoption: httpx's
+// StatusError embeds the request URL (which carries ?apikey=), so APIWithRetry
+// must redact it from returned errors.
+func TestAPIWithRetry_ErrorDoesNotLeakAPIKey(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer srv.Close()
+
+	c := newTestClient(srv.URL, "supersecretkey123", srv.Client())
+	_, err := c.APIWithRetry(context.Background(), "test", nil)
+	if err == nil {
+		t.Fatal("expected error from exhausted retries")
+	}
+	if strings.Contains(err.Error(), "supersecretkey123") {
+		t.Errorf("error leaked API key: %s", err.Error())
+	}
+}
+
+// TestAPIWithRetry_DoesNotLogAPIKey proves the scrubbing logger keeps httpx's
+// diagnostic logging (which includes the request URL with ?apikey=) from
+// leaking the key end-to-end.
+func TestAPIWithRetry_DoesNotLogAPIKey(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer srv.Close()
+
+	c := newTestClient(srv.URL, "supersecretkey123", srv.Client())
+	var buf bytes.Buffer
+	c.logger = newRedactedLogger(&buf, "supersecretkey123")
+
+	_, _ = c.APIWithRetry(context.Background(), "test", nil)
+
+	logged := buf.String()
+	if strings.Contains(logged, "supersecretkey123") {
+		t.Errorf("httpx retry logging leaked API key:\n%s", logged)
+	}
+	if !strings.Contains(logged, "retries exhausted") {
+		t.Errorf("expected httpx retry diagnostics in log output, got:\n%s", logged)
 	}
 }
