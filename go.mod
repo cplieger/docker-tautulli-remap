@@ -9,4 +9,4 @@ require (
 	golang.org/x/sync v0.21.0
 )
 
-require github.com/cplieger/httpx v1.0.3
+require github.com/cplieger/httpx v1.0.4

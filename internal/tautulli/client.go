@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log/slog"
 	"maps"
 	"net/http"
 	"net/url"
@@ -28,7 +27,6 @@ const defaultRetryDelayUnit = 5 * time.Second
 // Client is the concrete Tautulli API client.
 type Client struct {
 	httpClient *http.Client
-	logger     *slog.Logger
 	url        string
 	apiKey     string
 
@@ -66,15 +64,15 @@ type HistoryPage struct {
 func New(tautulliURL, apiKey string, httpClient *http.Client) *Client {
 	return &Client{
 		httpClient: httpClient,
-		logger:     redactedLogger(apiKey),
 		url:        tautulliURL,
 		apiKey:     apiKey,
 	}
 }
 
 // requestURL builds the Tautulli API v2 URL for cmd with the api key and any
-// extra query params. The api key rides in the query string, so error messages
-// derived from this URL must be redacted (see API / APIWithRetry).
+// extra query params. The api key rides in the query string: httpx redacts it
+// from APIWithRetry's logs and errors, and SanitizeErr strips it from bare-API
+// transport errors.
 func (c *Client) requestURL(cmd string, extra url.Values) string {
 	params := url.Values{"cmd": {cmd}, "apikey": {c.apiKey}}
 	maps.Copy(params, extra)
@@ -112,10 +110,9 @@ func (c *Client) APIWithRetry(ctx context.Context, cmd string, extra url.Values)
 		httpx.WithMaxAttempts(3),
 		httpx.WithBaseDelay(c.retryDelayUnit()),
 		httpx.WithMaxBodyBytes(maxTautulliBody),
-		httpx.WithLogger(c.logger),
 	)
 	if err != nil {
-		return nil, fmt.Errorf("tautulli %s: %w", cmd, httpx.RedactSecret(err, c.apiKey))
+		return nil, fmt.Errorf("tautulli %s: %w", cmd, err)
 	}
 	return body, nil
 }

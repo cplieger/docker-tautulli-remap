@@ -3,6 +3,7 @@ package tautulli
 import (
 	"bytes"
 	"context"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -322,15 +323,17 @@ func TestAPIWithRetry_DoesNotLogAPIKey(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	c := newTestClient(srv.URL, "supersecretkey123", srv.Client())
 	var buf bytes.Buffer
-	c.logger = newRedactedLogger(&buf, "supersecretkey123")
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug})))
+	t.Cleanup(func() { slog.SetDefault(prev) })
 
+	c := newTestClient(srv.URL, "supersecretkey123", srv.Client())
 	_, _ = c.APIWithRetry(context.Background(), "test", nil)
 
 	logged := buf.String()
 	if strings.Contains(logged, "supersecretkey123") {
-		t.Errorf("httpx retry logging leaked API key:\n%s", logged)
+		t.Errorf("retry logging leaked API key:\n%s", logged)
 	}
 	if !strings.Contains(logged, "retries exhausted") {
 		t.Errorf("expected httpx retry diagnostics in log output, got:\n%s", logged)
