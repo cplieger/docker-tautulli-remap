@@ -12,10 +12,10 @@ import (
 	"testing"
 	"time"
 
-	"tautulli-remap/internal/config"
-	"tautulli-remap/internal/plex"
-	"tautulli-remap/internal/remap"
-	"tautulli-remap/internal/tautulli"
+	"github.com/cplieger/tautulli-remap/internal/config"
+	"github.com/cplieger/tautulli-remap/internal/plex"
+	"github.com/cplieger/tautulli-remap/internal/remap"
+	"github.com/cplieger/tautulli-remap/internal/tautulli"
 )
 
 // --- Fake implementations for unit tests ---
@@ -26,6 +26,7 @@ func (f *fakePlex) ItemExists(_ context.Context, _ string) bool { return true }
 func (f *fakePlex) LibrarySections(_ context.Context) []plex.Section {
 	return []plex.Section{{Key: "1", Title: "Movies", Type: "movie"}}
 }
+
 func (f *fakePlex) LibraryAll(_ context.Context, _ string) []plex.LibItem {
 	return []plex.LibItem{{RatingKey: 1, Title: "Test", Year: 2020, GUIDs: []string{"imdb://tt0001"}}}
 }
@@ -36,17 +37,21 @@ func (f *fakeTautulli) API(_ context.Context, cmd string, _ url.Values) ([]byte,
 	f.calls = append(f.calls, cmd)
 	return []byte(`{"response":{"result":"success","data":{"recordsFiltered":0,"data":[]}}}`), nil
 }
+
 func (f *fakeTautulli) APIWithRetry(ctx context.Context, cmd string, params url.Values) ([]byte, error) {
 	return f.API(ctx, cmd, params)
 }
+
 func (f *fakeTautulli) GetHistory(_ context.Context, _ url.Values) (*tautulli.HistoryPage, error) {
 	f.calls = append(f.calls, "get_history")
 	return &tautulli.HistoryPage{Rows: nil, RecordsFiltered: 0}, nil
 }
+
 func (f *fakeTautulli) UpdateMetadata(_ context.Context, _, _ string, _ remap.MediaType) error {
 	f.calls = append(f.calls, "update_metadata_details")
 	return nil
 }
+
 func (f *fakeTautulli) DeleteRecentlyAdded(_ context.Context) error {
 	f.calls = append(f.calls, "delete_recently_added")
 	return nil

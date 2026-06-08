@@ -1,4 +1,4 @@
-module tautulli-remap
+module github.com/cplieger/tautulli-remap
 
 go 1.26.4
 

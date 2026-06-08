@@ -10,10 +10,10 @@ import (
 	"syscall"
 	"time"
 
-	appconfig "tautulli-remap/internal/config"
-	"tautulli-remap/internal/orchestrator"
-	"tautulli-remap/internal/plex"
-	"tautulli-remap/internal/tautulli"
+	appconfig "github.com/cplieger/tautulli-remap/internal/config"
+	"github.com/cplieger/tautulli-remap/internal/orchestrator"
+	"github.com/cplieger/tautulli-remap/internal/plex"
+	"github.com/cplieger/tautulli-remap/internal/tautulli"
 )
 
 // lastRunFile persists the timestamp of the last successful run.
