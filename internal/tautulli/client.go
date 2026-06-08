@@ -12,8 +12,8 @@ import (
 	"net/url"
 	"time"
 
-	"tautulli-remap/internal/httputil"
-	"tautulli-remap/internal/remap"
+	"github.com/cplieger/tautulli-remap/internal/httputil"
+	"github.com/cplieger/tautulli-remap/internal/remap"
 )
 
 // Response body size limit.

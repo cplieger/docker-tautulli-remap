@@ -8,12 +8,11 @@ import (
 	"sync"
 	"time"
 
+	"github.com/cplieger/tautulli-remap/internal/config"
+	"github.com/cplieger/tautulli-remap/internal/httputil"
+	"github.com/cplieger/tautulli-remap/internal/remap"
+	"github.com/cplieger/tautulli-remap/internal/tautulli"
 	"golang.org/x/sync/errgroup"
-
-	"tautulli-remap/internal/config"
-	"tautulli-remap/internal/httputil"
-	"tautulli-remap/internal/remap"
-	"tautulli-remap/internal/tautulli"
 )
 
 const (
