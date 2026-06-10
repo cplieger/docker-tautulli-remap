@@ -10,6 +10,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/cplieger/health"
 	appconfig "github.com/cplieger/tautulli-remap/internal/config"
 	"github.com/cplieger/tautulli-remap/internal/orchestrator"
 	"github.com/cplieger/tautulli-remap/internal/plex"
@@ -23,11 +24,12 @@ const lastRunFile = "/tmp/.last_run"
 var (
 	_ orchestrator.PlexClient     = (*plex.Client)(nil)
 	_ orchestrator.TautulliClient = (*tautulli.Client)(nil)
+	_ health.Signal               = (*health.Marker)(nil)
 )
 
 func main() {
 	if len(os.Args) > 1 && os.Args[1] == "health" {
-		runProbe(healthMarkerPath)
+		health.RunProbe(health.DefaultPath)
 	}
 
 	cfg, err := appconfig.Load()
@@ -40,7 +42,7 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	marker := newHealthMarker(healthMarkerPath)
+	marker := health.NewMarker(health.DefaultPath)
 	marker.Set(false)
 	defer marker.Cleanup()
 

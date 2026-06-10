@@ -7,7 +7,6 @@
 # code paths across pure-Go libs, Go-binary-in-Docker services, Go+TS
 # hybrids, and the vterm hybrid module:
 #   - lifecycle/signal handling (main.go, signal handlers, graceful shutdown)
-#   - health-marker filesystem ops (health.go)
 #   - struct-only / interface-only declaration files
 #   - test helper packages imported only from _test.go (testsupport, authtest,
 #     testcerts) — they ship in the module but their mutations don't affect
@@ -39,10 +38,6 @@ unleash:
     # Universal lifecycle / bootstrapping
     - "main.go"
     - "**/main.go"
-
-    # Health-check marker files (pattern across docker-* repos)
-    - "health.go"
-    - "**/health.go"
 
     # Struct/interface/doc-only files (no behavior to mutate)
     - "**/doc.go"

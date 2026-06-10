@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"github.com/cplieger/httpx"
-	"github.com/cplieger/tautulli-remap/internal/httputil"
 	"github.com/cplieger/tautulli-remap/internal/remap"
 )
 
@@ -71,8 +70,8 @@ func New(tautulliURL, apiKey string, httpClient *http.Client) *Client {
 
 // requestURL builds the Tautulli API v2 URL for cmd with the api key and any
 // extra query params. The api key rides in the query string: httpx redacts it
-// from APIWithRetry's logs and errors, and SanitizeErr strips it from bare-API
-// transport errors.
+// from APIWithRetry's logs and errors, and httpx.RedactSecret strips it from
+// bare-API transport errors.
 func (c *Client) requestURL(cmd string, extra url.Values) string {
 	params := url.Values{"cmd": {cmd}, "apikey": {c.apiKey}}
 	maps.Copy(params, extra)
@@ -85,15 +84,15 @@ func (c *Client) API(ctx context.Context, cmd string, extra url.Values) ([]byte,
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet,
 		c.requestURL(cmd, extra), http.NoBody)
 	if err != nil {
-		return nil, fmt.Errorf("tautulli %s: %w", cmd, httputil.SanitizeErr(err))
+		return nil, fmt.Errorf("tautulli %s: %w", cmd, httpx.RedactSecret(err, c.apiKey))
 	}
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("tautulli %s: %w", cmd, httputil.SanitizeErr(err))
+		return nil, fmt.Errorf("tautulli %s: %w", cmd, httpx.RedactSecret(err, c.apiKey))
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		httputil.DrainBody(resp.Body)
+		httpx.DrainClose(resp.Body)
 		return nil, fmt.Errorf("tautulli %s: HTTP %d", cmd, resp.StatusCode)
 	}
 	return io.ReadAll(io.LimitReader(resp.Body, maxTautulliBody))
