@@ -68,30 +68,6 @@ services:
 
 The container includes a built-in Docker healthcheck via the `/tautulli-remap health` subcommand. After each scheduled run, the main process creates or removes a marker file at `/tmp/.healthy`; the health subcommand checks for this file's existence. The container reports unhealthy when Tautulli or Plex APIs are unreachable, return errors, or the remap logic fails — it recovers automatically on the next successful run (including runs where nothing needs remapping).
 
-## Code quality
-
-| Metric | Value |
-|--------|-------|
-| [Test Coverage](https://go.dev/blog/cover) | 82.5% |
-| Tests | 181 |
-| [Cyclomatic Complexity](https://en.wikipedia.org/wiki/Cyclomatic_complexity) (avg) | 5.0 |
-| [Cognitive Complexity](https://www.sonarsource.com/docs/CognitiveComplexity.pdf) (avg) | 6.3 |
-| [Mutation Efficacy](https://en.wikipedia.org/wiki/Mutation_testing) | 77.0% (59 runs) |
-| Test Framework | Property-based ([rapid](https://github.com/flyingmutant/rapid)) + table-driven |
-
-Tests cover the full matching pipeline (GUID, title+year, and
-title-only strategies with type guards, fallback chains, and
-whitespace handling), all Tautulli and Plex API functions with HTTP
-mock servers (including retry logic, pagination, context
-cancellation), stale key detection, Plex library indexing,
-remapping with dry-run/live modes, and the end-to-end run function.
-Property-based tests verify GUID normalization idempotency and
-panic-freedom, and rating key type coercion round-trips.
-
-Not tested: `main()` (signal handling and scheduler loop) — a thin
-wrapper around the tested core logic, validated by Docker
-healthchecks in production.
-
 ## Security
 
 **No vulnerabilities found.** All scans clean across 8 tools.
