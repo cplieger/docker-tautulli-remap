@@ -9,7 +9,7 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/cplieger/tautulli-remap/internal/httputil"
+	"github.com/cplieger/httpx"
 	"github.com/cplieger/tautulli-remap/internal/remap"
 )
 
@@ -53,11 +53,11 @@ func (c *Client) ItemExists(ctx context.Context, ratingKey string) bool {
 	req.Header.Set("Accept", "application/json")
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		slog.Debug("plex check failed", "key", ratingKey, "error", httputil.SanitizeErr(err))
+		slog.Debug("plex check failed", "key", ratingKey, "error", err)
 		return false
 	}
 	defer resp.Body.Close()
-	httputil.DrainBody(resp.Body)
+	httpx.DrainClose(resp.Body)
 	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusNotFound {
 		slog.Warn("plex check unexpected status", "key", ratingKey, "status", resp.StatusCode)
 	}
@@ -82,7 +82,7 @@ func (c *Client) LibrarySections(ctx context.Context) []Section {
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		httputil.DrainBody(resp.Body)
+		httpx.DrainClose(resp.Body)
 		slog.Error("Plex sections returned non-200", "status", resp.StatusCode)
 		return nil
 	}
@@ -135,7 +135,7 @@ func (c *Client) LibraryAll(ctx context.Context, sectionKey string) []LibItem {
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		httputil.DrainBody(resp.Body)
+		httpx.DrainClose(resp.Body)
 		slog.Error("Plex library returned non-200", "status", resp.StatusCode, "section", sectionKey)
 		return nil
 	}
