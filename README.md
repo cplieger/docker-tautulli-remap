@@ -71,7 +71,7 @@ The container includes a built-in Docker healthcheck via the `/tautulli-remap he
 
 ## Security
 
-**No vulnerabilities found.** All scans clean across 8 tools.
+**No vulnerabilities found.** All scans clean across all scanners.
 
 | Tool | Result |
 |------|--------|
@@ -104,10 +104,10 @@ string. HTTP error messages sanitized to strip query parameters
 
 All dependencies are updated automatically via [Renovate](https://github.com/renovatebot/renovate) and pinned by digest or version for reproducibility.
 
-| Dependency | Version | Source |
-|------------|---------|--------|
-| golang | `1.26-alpine` | [Go](https://hub.docker.com/_/golang) |
-| gcr.io/distroless/static-debian13 | `nonroot` | [Distroless](https://github.com/GoogleContainerTools/distroless) |
+| Dependency | Source |
+|------------|--------|
+| golang | [Go](https://hub.docker.com/_/golang) |
+| gcr.io/distroless/static | [Distroless](https://github.com/GoogleContainerTools/distroless) |
 
 ## Credits
 
