@@ -74,7 +74,7 @@ hoc at a call site.
 ## Local development
 
 The repo is pure Go with no Makefile — use the standard toolchain from the
-repo root. Go version is pinned in `go.mod` (currently 1.26).
+repo root. Go version is pinned in `go.mod`.
 
 ```sh
 go build ./...                  # compile
