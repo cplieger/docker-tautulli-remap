@@ -1,13 +1,14 @@
 # tautulli-remap
 
-[![CI](https://github.com/cplieger/tautulli-remap/actions/workflows/ci.yaml/badge.svg)](https://github.com/cplieger/tautulli-remap/actions/workflows/ci.yaml)
-[![GitHub release](https://img.shields.io/github/v/release/cplieger/tautulli-remap)](https://github.com/cplieger/tautulli-remap/releases)
 [![Image Size](https://ghcr-badge.egpl.dev/cplieger/tautulli-remap/size)](https://github.com/cplieger/tautulli-remap/pkgs/container/tautulli-remap)
 ![Platforms](https://img.shields.io/badge/platforms-amd64%20%7C%20arm64-blue)
 ![base: Distroless](https://img.shields.io/badge/base-Distroless_nonroot-4285F4?logo=google)
-[![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/cplieger/tautulli-remap/badge)](https://scorecard.dev/viewer/?uri=github.com/cplieger/tautulli-remap)
-[![Coverage](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/cplieger/tautulli-remap/badges/coverage.json)](https://github.com/cplieger/tautulli-remap/actions/workflows/coverage.yml)
+[![Go Report Card](https://goreportcard.com/badge/github.com/cplieger/tautulli-remap)](https://goreportcard.com/report/github.com/cplieger/tautulli-remap)
+[![Test coverage](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/cplieger/tautulli-remap/badges/coverage.json)](https://github.com/cplieger/tautulli-remap/actions/workflows/coverage.yml)
+[![Mutation](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/cplieger/tautulli-remap/badges/mutation.json)](https://github.com/cplieger/tautulli-remap/issues?q=label%3Agremlins-tracker)
 [![OpenSSF Best Practices](https://www.bestpractices.dev/projects/13222/badge)](https://www.bestpractices.dev/projects/13222)
+[![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/cplieger/tautulli-remap/badge)](https://scorecard.dev/viewer/?uri=github.com/cplieger/tautulli-remap)
+[![SBOM](https://img.shields.io/badge/SBOM-SPDX-1D4ED8)](https://github.com/cplieger/tautulli-remap/releases)
 
 Fix broken Tautulli watch history after reorganizing your Plex libraries.
 
