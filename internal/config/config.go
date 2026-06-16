@@ -3,8 +3,8 @@ package config
 import (
 	"log/slog"
 	"os"
-	"strconv"
 	"strings"
+	"time"
 )
 
 // Config holds the application configuration.
@@ -13,7 +13,7 @@ type Config struct {
 	TautulliAPIKey    string
 	PlexURL           string
 	PlexToken         string
-	ScheduleHours     int
+	ScheduleInterval  time.Duration // 0 = resident-idle (external trigger)
 	DryRun            bool
 	FallbackTitleYear bool
 	FallbackTitleOnly bool
@@ -21,13 +21,7 @@ type Config struct {
 
 // Load parses environment variables and returns the configuration.
 func Load() (*Config, error) {
-	rawHours := getEnv("SCHEDULE_HOURS", "0")
-	hours, err := strconv.Atoi(rawHours)
-	if err != nil {
-		slog.Warn("invalid SCHEDULE_HOURS, defaulting to one-shot mode",
-			"value", rawHours, "error", err)
-		hours = 0
-	}
+	interval := parseScheduleInterval(getEnv("SCHEDULE_INTERVAL", "off"))
 
 	apiKey := requireEnv("TAUTULLI_APIKEY")
 	if apiKey == "" {
@@ -43,22 +37,47 @@ func Load() (*Config, error) {
 		TautulliAPIKey:    apiKey,
 		PlexURL:           getEnv("PLEX_URL", "http://plex:32400"),
 		PlexToken:         token,
-		ScheduleHours:     hours,
+		ScheduleInterval:  interval,
 		DryRun:            GetEnvBool("DRY_RUN", true),
 		FallbackTitleYear: GetEnvBool("FALLBACK_TITLE_YEAR", true),
 		FallbackTitleOnly: GetEnvBool("FALLBACK_TITLE_ONLY", false),
 	}, nil
 }
 
+// parseScheduleInterval parses SCHEDULE_INTERVAL. Accepts a Go duration
+// (e.g. "24h", "6h30m") or the sentinels "off"/"disabled"/"0"/"0s" which
+// all map to 0 (resident-idle mode). Unparseable values warn and default to off.
+func parseScheduleInterval(raw string) time.Duration {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "", "off", "disabled", "0", "0s":
+		return 0
+	}
+	d, err := time.ParseDuration(raw)
+	if err != nil {
+		slog.Warn("invalid SCHEDULE_INTERVAL, defaulting to off (resident-idle)",
+			"value", raw, "error", err)
+		return 0
+	}
+	if d < 0 {
+		slog.Warn("negative SCHEDULE_INTERVAL, defaulting to off", "value", raw)
+		return 0
+	}
+	return d
+}
+
 // LogConfig logs the active configuration at startup.
 func LogConfig(cfg *Config) {
+	mode := "resident-idle"
+	if cfg.ScheduleInterval > 0 {
+		mode = cfg.ScheduleInterval.String()
+	}
 	slog.Info("configuration loaded",
 		"tautulli_url", cfg.TautulliURL,
 		"plex_url", cfg.PlexURL,
 		"dry_run", cfg.DryRun,
 		"fallback_title_year", cfg.FallbackTitleYear,
 		"fallback_title_only", cfg.FallbackTitleOnly,
-		"schedule_hours", cfg.ScheduleHours,
+		"schedule_interval", mode,
 	)
 }
 

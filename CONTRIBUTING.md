@@ -7,17 +7,20 @@ the architecture and local workflow a contributor needs to land a change.
 ## What this is
 
 A stdlib-only Go service that repairs Tautulli watch history after a Plex
-library reorganization assigns new internal rating keys. It runs once
-(`SCHEDULE_HOURS=0`) or on a schedule, has no inbound listener, and ships as a
-distroless nonroot image. See `README.md` for the user-facing configuration
-reference.
+library reorganization assigns new internal rating keys. It has three run
+modes: scheduled (`SCHEDULE_INTERVAL (e.g. "24h")`), resident-idle (`SCHEDULE_INTERVAL=off`,
+stays healthy and awaits `tautulli-remap trigger`), or one-shot
+(`tautulli-remap trigger`, exits 0/1). It has no inbound listener and ships
+as a distroless nonroot image. See `README.md` for the user-facing
+configuration reference.
 
 ## Package layout
 
 `main.go` is wiring only — it loads config, builds an `*http.Client`,
 constructs the Plex and Tautulli clients, and hands them to the orchestrator.
-The `health` subcommand (`tautulli-remap health`) is dispatched at the top of
-`main()` before anything else. All real logic lives under `internal/`:
+The `health` subcommand (`tautulli-remap health`) and `trigger` subcommand
+(`tautulli-remap trigger`) are dispatched at the top of `main()` before
+anything else. All real logic lives under `internal/`:
 
 - `internal/config` — environment parsing into a `Config` struct. Required
   vars (`TAUTULLI_APIKEY`, `PLEX_TOKEN`) return a `MissingEnvError`; booleans
@@ -113,9 +116,9 @@ property-based via [rapid](https://github.com/flyingmutant/rapid); property
 tests assert invariants like GUID-normalization idempotency, panic-freedom,
 and rating-key coercion round-trips. API clients are exercised against
 `httptest` mock servers covering retry, pagination, and context cancellation.
-`main()` itself is intentionally untested (thin signal/scheduler wrapper
-validated by the Docker healthcheck). Add tests for new logic and keep the
-property tests passing.
+`main()` itself is intentionally untested (thin signal/scheduler/trigger
+wrapper validated by the Docker healthcheck). Add tests for new logic and keep
+the property tests passing.
 
 ## Commits and PRs
 

@@ -295,6 +295,33 @@ func TestGetHistory_APIError(t *testing.T) {
 	}
 }
 
+// TestRetryDelayUnit pins the zero-value-uses-default boundary in
+// retryDelayUnit. The retry-timing tests only exercise this indirectly (and
+// flakily), so a direct table-driven test deterministically catches both the
+// boundary mutant (> 0 -> >= 0, which would return the zero value instead of
+// the default) and the negation mutant (> 0 -> <= 0, which would return the
+// default instead of a configured positive value).
+func TestRetryDelayUnit(t *testing.T) {
+	tests := []struct {
+		name string
+		set  time.Duration
+		want time.Duration
+	}{
+		{"zero uses default", 0, defaultRetryDelayUnit},
+		{"negative uses default", -time.Second, defaultRetryDelayUnit},
+		{"positive value is returned unchanged", 2 * time.Millisecond, 2 * time.Millisecond},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			c := New("http://unused", "k", http.DefaultClient)
+			c.RetryDelayUnit = tt.set
+			if got := c.retryDelayUnit(); got != tt.want {
+				t.Errorf("retryDelayUnit() with RetryDelayUnit=%v = %v, want %v", tt.set, got, tt.want)
+			}
+		})
+	}
+}
+
 // TestAPIWithRetry_ErrorDoesNotLeakAPIKey guards the httpx adoption: httpx's
 // StatusError embeds the request URL (which carries ?apikey=), so APIWithRetry
 // must redact it from returned errors.

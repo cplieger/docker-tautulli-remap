@@ -2,6 +2,7 @@ package config
 
 import (
 	"testing"
+	"time"
 )
 
 func TestLoad(t *testing.T) {
@@ -12,7 +13,7 @@ func TestLoad(t *testing.T) {
 	t.Setenv("DRY_RUN", "false")
 	t.Setenv("FALLBACK_TITLE_YEAR", "true")
 	t.Setenv("FALLBACK_TITLE_ONLY", "true")
-	t.Setenv("SCHEDULE_HOURS", "12")
+	t.Setenv("SCHEDULE_INTERVAL", "12h")
 
 	cfg, err := Load()
 	if err != nil {
@@ -30,8 +31,8 @@ func TestLoad(t *testing.T) {
 	if !cfg.FallbackTitleOnly {
 		t.Error("FallbackTitleOnly should be true")
 	}
-	if cfg.ScheduleHours != 12 {
-		t.Errorf("ScheduleHours = %d, want 12", cfg.ScheduleHours)
+	if cfg.ScheduleInterval != 12*time.Hour {
+		t.Errorf("ScheduleInterval = %v, want 12h", cfg.ScheduleInterval)
 	}
 }
 
@@ -39,7 +40,7 @@ func TestLoadDefaults(t *testing.T) {
 	t.Setenv("TAUTULLI_APIKEY", "key")
 	t.Setenv("PLEX_TOKEN", "token")
 	t.Setenv("DRY_RUN", "")
-	t.Setenv("SCHEDULE_HOURS", "")
+	t.Setenv("SCHEDULE_INTERVAL", "")
 	t.Setenv("FALLBACK_TITLE_YEAR", "")
 	t.Setenv("FALLBACK_TITLE_ONLY", "")
 	t.Setenv("TAUTULLI_URL", "")
@@ -114,16 +115,16 @@ func TestGetEnvBool(t *testing.T) {
 	}
 }
 
-func TestLoadInvalidScheduleHours(t *testing.T) {
+func TestLoadInvalidScheduleInterval(t *testing.T) {
 	t.Setenv("TAUTULLI_APIKEY", "key")
 	t.Setenv("PLEX_TOKEN", "token")
-	t.Setenv("SCHEDULE_HOURS", "notanumber")
+	t.Setenv("SCHEDULE_INTERVAL", "notaduration")
 
 	cfg, err := Load()
 	if err != nil {
 		t.Fatalf("Load() error: %v", err)
 	}
-	if cfg.ScheduleHours != 0 {
-		t.Errorf("ScheduleHours = %d, want 0", cfg.ScheduleHours)
+	if cfg.ScheduleInterval != 0 {
+		t.Errorf("ScheduleInterval = %v, want 0", cfg.ScheduleInterval)
 	}
 }

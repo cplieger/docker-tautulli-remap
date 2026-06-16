@@ -165,11 +165,10 @@ func (o *Orchestrator) Run(ctx context.Context) bool {
 }
 
 // RunScheduler implements the long-running scheduled mode. The setHealthy
-// callback controls the health marker; readLastRun/writeLastRun persist
-// the last successful run timestamp.
-func (o *Orchestrator) RunScheduler(ctx context.Context, setHealthy func(bool), readLastRun func() time.Time, writeLastRun func()) {
-	interval := time.Duration(o.cfg.ScheduleHours) * time.Hour
-	slog.Info("scheduled mode", "interval_hours", o.cfg.ScheduleHours)
+// callback controls the health marker.
+func (o *Orchestrator) RunScheduler(ctx context.Context, setHealthy func(bool)) {
+	interval := o.cfg.ScheduleInterval
+	slog.Info("scheduled mode", "interval", interval)
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 
@@ -181,7 +180,6 @@ func (o *Orchestrator) RunScheduler(ctx context.Context, setHealthy func(bool), 
 		if ok {
 			failures = 0
 			setHealthy(true)
-			writeLastRun()
 			slog.Info("run complete",
 				"next_run_at", time.Now().Add(interval).UTC().Format(time.RFC3339))
 			return
@@ -189,23 +187,13 @@ func (o *Orchestrator) RunScheduler(ctx context.Context, setHealthy func(bool), 
 		failures++
 		slog.Warn("run failed",
 			"consecutive_failures", failures,
-			"retry_in_hours", o.cfg.ScheduleHours)
+			"retry_in", interval)
 		if failures >= 3 {
 			setHealthy(false)
 		}
 	}
 
-	if last := readLastRun(); !last.IsZero() {
-		if since := time.Since(last); since < interval/2 {
-			slog.Info("skipping startup run",
-				"reason", "ran_recently",
-				"last_run_ago", since.Truncate(time.Second))
-		} else {
-			doRun()
-		}
-	} else {
-		doRun()
-	}
+	doRun()
 
 	for {
 		select {

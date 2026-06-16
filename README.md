@@ -24,7 +24,7 @@ For each stale entry, it attempts to find the correct current rating key in Plex
 
 ### Why this design
 
-- **Runs on a schedule or once-and-exit** — set `SCHEDULE_HOURS=0` for a single run, or any positive value for periodic remapping.
+- **Three run modes** — `SCHEDULE_INTERVAL (e.g. "24h")` for a built-in timer, `SCHEDULE_INTERVAL=off` for resident-idle (stays healthy, awaits `docker exec ... tautulli-remap trigger`), or `tautulli-remap trigger` for a one-shot pass that exits 0/1.
 - **Dry-run by default for safety** — no changes are applied until you explicitly set `DRY_RUN=false`, so you can always preview first.
 - **Three matching strategies with increasing aggressiveness** — starts with the safest (GUID), falls back to title+year, and optionally title-only, giving you control over the risk/coverage tradeoff.
 - **Stdlib-only, zero external dependencies** — pure Go with no third-party modules, minimizing supply-chain risk.
@@ -48,7 +48,7 @@ services:
       TAUTULLI_APIKEY: "your-tautulli-apikey"
       PLEX_URL: "http://plex:32400"
       PLEX_TOKEN: "your-plex-token"
-      SCHEDULE_HOURS: "24"  # 0 = run once and exit
+      SCHEDULE_INTERVAL: "24h"  # Go duration; "off" = resident-idle
       FALLBACK_TITLE_YEAR: "true"
       FALLBACK_TITLE_ONLY: "false"  # risk of false matches
       DRY_RUN: "true"  # set to false to apply changes
@@ -63,10 +63,37 @@ services:
 | `TAUTULLI_APIKEY` | Tautulli API key (Settings → Web Interface → API Key) | - | Yes |
 | `PLEX_URL` | Plex Media Server URL (Docker DNS name or LAN IP) | `http://plex:32400` | No |
 | `PLEX_TOKEN` | Plex authentication token (see Plex support article) | - | Yes |
-| `SCHEDULE_HOURS` | Hours between remap runs (0 = run once and exit) | `24` | No |
+| `SCHEDULE_INTERVAL` | Go duration between remap runs (e.g. `24h`, `6h30m`). `off`/`disabled`/`0` = resident-idle (awaits external trigger via `tautulli-remap trigger`) | `off` | No |
 | `FALLBACK_TITLE_YEAR` | Try title+year matching when GUID match fails | `true` | No |
 | `FALLBACK_TITLE_ONLY` | Try title-only matching as last resort (risk of false matches) | `false` | No |
 | `DRY_RUN` | Log what would change without applying — set to false to apply | `true` | No |
+
+## Subcommands
+
+| Subcommand | Description |
+|------------|-------------|
+| `tautulli-remap health` | Checks the `/tmp/.healthy` marker file. Used as the Docker `HEALTHCHECK`. Exits 0 (healthy) or 1 (unhealthy). |
+| `tautulli-remap trigger` | Executes a single remap pass immediately. Exits 0 on success, 1 on failure. Designed for `docker exec` or Ofelia `job-exec`. |
+
+### Recommended deployment with external scheduling
+
+Use `SCHEDULE_INTERVAL=off` (resident-idle) with an external scheduler like Ofelia:
+
+```yaml
+services:
+  tautulli-remap:
+    image: ghcr.io/cplieger/tautulli-remap:latest
+    environment:
+      SCHEDULE_INTERVAL: "off"  # resident-idle, awaits trigger
+      DRY_RUN: "false"
+      # ... other env vars
+    labels:
+      ofelia.enabled: "true"
+      ofelia.job-exec.tautulli-remap.schedule: "0 0 3 * * *"
+      ofelia.job-exec.tautulli-remap.command: "tautulli-remap trigger"
+```
+
+This keeps the container healthy (passing healthchecks) while delegating scheduling to Ofelia — the recommended pattern for external scheduling.
 
 ## Healthcheck
 

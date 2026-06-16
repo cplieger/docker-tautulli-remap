@@ -11,7 +11,7 @@ services:
       TAUTULLI_APIKEY: "your-tautulli-apikey"
       PLEX_URL: "http://plex:32400"
       PLEX_TOKEN: "your-plex-token"
-      SCHEDULE_HOURS: "24"  # 0 = run once and exit
+      SCHEDULE_INTERVAL: "24h"  # Go duration; "off" = resident-idle
       FALLBACK_TITLE_YEAR: "true"
       FALLBACK_TITLE_ONLY: "false"  # risk of false matches
       DRY_RUN: "true"  # set to false to apply changes

@@ -27,6 +27,10 @@ func TestNormalizeGUID(t *testing.T) {
 		{"plex movie", "plex://movie/5d776b59ad5437001f79c6f8", "plex://movie/5d776b59ad5437001f79c6f8"},
 		{"plex episode", "plex://episode/5d9c135046115600200d30a2", "plex://episode/5d9c135046115600200d30a2"},
 		{"mbid", "mbid://abcdef01-2345-6789-abcd-ef0123456789", "mbid://abcdef01-2345-6789-abcd-ef0123456789"},
+		// StripPath id starting with "/" (separator at index 0): pins the
+		// boundary in `strings.Index(id, "/") >= 0`. A `>= 0` -> `> 0` mutant
+		// would skip the strip and yield "tvdb:///271557".
+		{"thetvdb leading-slash id strips to empty", "com.plexapp.agents.thetvdb:///271557", "tvdb://"},
 		{"local unsupported", "local://616507", ""},
 		{"agents.none unsupported", "com.plexapp.agents.none://632d404bf27d52a513ccd45e4df820cd276f3090?lang=xn", ""},
 		{"unknown scheme", "custom://something", ""},
@@ -48,6 +52,10 @@ func TestExtractAfter(t *testing.T) {
 		{"imdb://tt1234567", "imdb://", "tt1234567"},
 		{"com.plexapp.agents.imdb://tt1234567?lang=en", "imdb://", "tt1234567"},
 		{"tmdb://12345", "imdb://", ""},
+		// Query separator at index 0 of the remainder: pins the boundary in
+		// `strings.Index(after, "?") >= 0`. A `>= 0` -> `> 0` mutant would
+		// keep the query and return "?lang=en".
+		{"imdb://?lang=en", "imdb://", ""},
 		{"", "imdb://", ""},
 	}
 	for _, tt := range tests {
