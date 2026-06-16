@@ -72,20 +72,29 @@ func main() {
 }
 
 // runTrigger executes a single remap pass and exits. This is the target for
-// external schedulers (Ofelia job-exec, cron, etc.).
+// external schedulers (Ofelia job-exec, cron, etc.). The os.Exit lives here,
+// free of pending defers; doTrigger holds the defers and returns a code.
 func runTrigger() {
+	os.Exit(doTrigger())
+}
+
+// doTrigger runs one remap pass and returns the process exit code.
+func doTrigger() int {
 	cfg, err := appconfig.Load()
 	if err != nil {
 		slog.Error("failed to load configuration", "error", err)
-		os.Exit(1)
+		return 1
 	}
 	appconfig.LogConfig(cfg)
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
+	// NOTE: no marker.Cleanup() here. In the homelab the resident-idle main
+	// process owns /tmp/.healthy; this trigger runs as a separate `docker exec`
+	// against the same file, so it only updates the marker to reflect the run's
+	// outcome — deleting it would mark the resident container unhealthy.
 	marker := health.NewMarker(health.DefaultPath)
-	defer marker.Cleanup()
 
 	httpClient := &http.Client{
 		Timeout: 2 * time.Minute,
@@ -102,7 +111,7 @@ func runTrigger() {
 	marker.Set(ok)
 	slog.Info("shutting down", "mode", "trigger", "success", ok)
 	if !ok {
-		os.Exit(1)
+		return 1
 	}
-	os.Exit(0)
+	return 0
 }
