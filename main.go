@@ -6,7 +6,6 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
-	"strings"
 	"syscall"
 	"time"
 
@@ -17,9 +16,6 @@ import (
 	"github.com/cplieger/tautulli-remap/internal/tautulli"
 )
 
-// lastRunFile persists the timestamp of the last successful run.
-const lastRunFile = "/tmp/.last_run"
-
 // Compile-time interface satisfaction checks.
 var (
 	_ orchestrator.PlexClient     = (*plex.Client)(nil)
@@ -28,8 +24,13 @@ var (
 )
 
 func main() {
-	if len(os.Args) > 1 && os.Args[1] == "health" {
-		health.RunProbe(health.DefaultPath)
+	if len(os.Args) > 1 {
+		switch os.Args[1] {
+		case "health":
+			health.RunProbe(health.DefaultPath)
+		case "trigger":
+			runTrigger()
+		}
 	}
 
 	cfg, err := appconfig.Load()
@@ -57,34 +58,51 @@ func main() {
 	tautulliClient := tautulli.New(cfg.TautulliURL, cfg.TautulliAPIKey, httpClient)
 	orch := orchestrator.New(plexClient, tautulliClient, cfg)
 
-	if cfg.ScheduleHours > 0 {
-		orch.RunScheduler(ctx, marker.Set, readLastRun, writeLastRun)
+	if cfg.ScheduleInterval > 0 {
+		orch.RunScheduler(ctx, marker.Set)
 		return
 	}
 
+	// Resident-idle mode: no internal timer, wait for external triggers via
+	// "docker exec ... tautulli-remap trigger". Healthy while idle.
+	marker.Set(true)
+	slog.Info("resident-idle mode", "reason", "SCHEDULE_INTERVAL=off, awaiting external trigger")
+	<-ctx.Done()
+	slog.Info("shutting down", "mode", "resident-idle", "cause", context.Cause(ctx))
+}
+
+// runTrigger executes a single remap pass and exits. This is the target for
+// external schedulers (Ofelia job-exec, cron, etc.).
+func runTrigger() {
+	cfg, err := appconfig.Load()
+	if err != nil {
+		slog.Error("failed to load configuration", "error", err)
+		os.Exit(1)
+	}
+	appconfig.LogConfig(cfg)
+
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	marker := health.NewMarker(health.DefaultPath)
+	defer marker.Cleanup()
+
+	httpClient := &http.Client{
+		Timeout: 2 * time.Minute,
+		CheckRedirect: func(_ *http.Request, _ []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+	}
+
+	plexClient := plex.New(cfg.PlexURL, cfg.PlexToken, httpClient)
+	tautulliClient := tautulli.New(cfg.TautulliURL, cfg.TautulliAPIKey, httpClient)
+	orch := orchestrator.New(plexClient, tautulliClient, cfg)
+
 	ok := orch.Run(ctx)
 	marker.Set(ok)
-	slog.Info("shutting down", "mode", "oneshot", "success", ok)
-}
-
-// readLastRun returns the timestamp of the last successful run, or the zero
-// time if no marker exists or it is unparseable.
-func readLastRun() time.Time {
-	b, err := os.ReadFile(lastRunFile)
-	if err != nil {
-		return time.Time{}
+	slog.Info("shutting down", "mode", "trigger", "success", ok)
+	if !ok {
+		os.Exit(1)
 	}
-	t, err := time.Parse(time.RFC3339, strings.TrimSpace(string(b)))
-	if err != nil {
-		return time.Time{}
-	}
-	return t
-}
-
-// writeLastRun records the current time as the last successful run.
-func writeLastRun() {
-	ts := time.Now().UTC().Format(time.RFC3339)
-	if err := os.WriteFile(lastRunFile, []byte(ts), 0o600); err != nil {
-		slog.Debug("failed to write last-run marker", "path", lastRunFile, "error", err)
-	}
+	os.Exit(0)
 }
