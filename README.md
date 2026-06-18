@@ -56,23 +56,23 @@ services:
 
 ## Configuration reference
 
-| Variable | Description | Default | Required |
-|----------|-------------|---------|----------|
-| `TZ` | Container timezone | `Europe/Paris` | No |
-| `TAUTULLI_URL` | Tautulli instance URL (Docker DNS name or LAN IP) | `http://tautulli:8181` | No |
-| `TAUTULLI_APIKEY` | Tautulli API key (Settings → Web Interface → API Key) | - | Yes |
-| `PLEX_URL` | Plex Media Server URL (Docker DNS name or LAN IP) | `http://plex:32400` | No |
-| `PLEX_TOKEN` | Plex authentication token (see Plex support article) | - | Yes |
-| `SCHEDULE_INTERVAL` | Go duration between remap runs (e.g. `24h`, `6h30m`). `off`/`disabled`/`0` = resident-idle (awaits external trigger via `tautulli-remap trigger`) | `off` | No |
-| `FALLBACK_TITLE_YEAR` | Try title+year matching when GUID match fails | `true` | No |
-| `FALLBACK_TITLE_ONLY` | Try title-only matching as last resort (risk of false matches) | `false` | No |
-| `DRY_RUN` | Log what would change without applying — set to false to apply | `true` | No |
+| Variable              | Description                                                                                                                                       | Default                | Required |
+| --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------- | -------- |
+| `TZ`                  | Container timezone                                                                                                                                | `Europe/Paris`         | No       |
+| `TAUTULLI_URL`        | Tautulli instance URL (Docker DNS name or LAN IP)                                                                                                 | `http://tautulli:8181` | No       |
+| `TAUTULLI_APIKEY`     | Tautulli API key (Settings → Web Interface → API Key)                                                                                             | -                      | Yes      |
+| `PLEX_URL`            | Plex Media Server URL (Docker DNS name or LAN IP)                                                                                                 | `http://plex:32400`    | No       |
+| `PLEX_TOKEN`          | Plex authentication token (see Plex support article)                                                                                              | -                      | Yes      |
+| `SCHEDULE_INTERVAL`   | Go duration between remap runs (e.g. `24h`, `6h30m`). `off`/`disabled`/`0` = resident-idle (awaits external trigger via `tautulli-remap trigger`) | `off`                  | No       |
+| `FALLBACK_TITLE_YEAR` | Try title+year matching when GUID match fails                                                                                                     | `true`                 | No       |
+| `FALLBACK_TITLE_ONLY` | Try title-only matching as last resort (risk of false matches)                                                                                    | `false`                | No       |
+| `DRY_RUN`             | Log what would change without applying — set to false to apply                                                                                    | `true`                 | No       |
 
 ## Subcommands
 
-| Subcommand | Description |
-|------------|-------------|
-| `tautulli-remap health` | Checks the `/tmp/.healthy` marker file. Used as the Docker `HEALTHCHECK`. Exits 0 (healthy) or 1 (unhealthy). |
+| Subcommand               | Description                                                                                                                  |
+| ------------------------ | ---------------------------------------------------------------------------------------------------------------------------- |
+| `tautulli-remap health`  | Checks the `/tmp/.healthy` marker file. Used as the Docker `HEALTHCHECK`. Exits 0 (healthy) or 1 (unhealthy).                |
 | `tautulli-remap trigger` | Executes a single remap pass immediately. Exits 0 on success, 1 on failure. Designed for `docker exec` or Ofelia `job-exec`. |
 
 ### Recommended deployment with external scheduling
@@ -103,15 +103,15 @@ The container includes a built-in Docker healthcheck via the `/tautulli-remap he
 
 **No vulnerabilities found.** All scans clean across all scanners.
 
-| Tool | Result |
-|------|--------|
+| Tool                                                                | Result                           |
+| ------------------------------------------------------------------- | -------------------------------- |
 | [govulncheck](https://pkg.go.dev/golang.org/x/vuln/cmd/govulncheck) | No vulnerabilities in call graph |
-| [golangci-lint](https://golangci-lint.run/) (gosec, gocritic) | 0 issues |
-| [trivy](https://trivy.dev/) | 0 vulnerabilities |
-| [grype](https://github.com/anchore/grype) | 0 vulnerabilities |
-| [gitleaks](https://github.com/gitleaks/gitleaks) | No secrets detected |
-| [semgrep](https://semgrep.dev/) | 1 info (false positive) |
-| [hadolint](https://github.com/hadolint/hadolint) | Clean |
+| [golangci-lint](https://golangci-lint.run/) (gosec, gocritic)       | 0 issues                         |
+| [trivy](https://trivy.dev/)                                         | 0 vulnerabilities                |
+| [grype](https://github.com/anchore/grype)                           | 0 vulnerabilities                |
+| [gitleaks](https://github.com/gitleaks/gitleaks)                    | No secrets detected              |
+| [semgrep](https://semgrep.dev/)                                     | 1 info (false positive)          |
+| [hadolint](https://github.com/hadolint/hadolint)                    | Clean                            |
 
 No network listener; connects outbound to Tautulli and Plex
 only. Set `DRY_RUN=true` on first run to preview changes safely.
@@ -134,9 +134,9 @@ string. HTTP error messages sanitized to strip query parameters
 
 All dependencies are updated automatically via [Renovate](https://github.com/renovatebot/renovate) and pinned by digest or version for reproducibility.
 
-| Dependency | Source |
-|------------|--------|
-| golang | [Go](https://hub.docker.com/_/golang) |
+| Dependency               | Source                                                           |
+| ------------------------ | ---------------------------------------------------------------- |
+| golang                   | [Go](https://hub.docker.com/_/golang)                            |
 | gcr.io/distroless/static | [Distroless](https://github.com/GoogleContainerTools/distroless) |
 
 ## Credits
