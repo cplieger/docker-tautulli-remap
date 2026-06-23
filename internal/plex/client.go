@@ -1,3 +1,4 @@
+// Package plex provides a client for the Plex Media Server HTTP API.
 package plex
 
 import (
@@ -37,6 +38,9 @@ func New(plexURL, token string, httpClient *http.Client) *Client {
 	return &Client{httpClient: httpClient, url: plexURL, token: token}
 }
 
+// ItemExists reports whether a Plex library item with the given rating key
+// currently exists on the server. Returns false on network errors or a
+// non-200 response so the item is conservatively treated as stale.
 func (c *Client) ItemExists(ctx context.Context, ratingKey string) bool {
 	if !remap.RatingKey(ratingKey).IsValid() {
 		slog.Warn("invalid rating key (non-numeric)", "key", ratingKey)
@@ -64,6 +68,8 @@ func (c *Client) ItemExists(ctx context.Context, ratingKey string) bool {
 	return resp.StatusCode == http.StatusOK
 }
 
+// LibrarySections returns the list of all library sections from the Plex
+// server. Only movie and show sections are used by the remap workflow.
 func (c *Client) LibrarySections(ctx context.Context) []Section {
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
@@ -113,6 +119,9 @@ func (c *Client) LibrarySections(ctx context.Context) []Section {
 	return sections
 }
 
+// LibraryAll returns all items in the Plex library section identified by
+// sectionKey. Each item includes its rating key, title, year, and any
+// associated GUIDs for cross-source matching.
 func (c *Client) LibraryAll(ctx context.Context, sectionKey string) []LibItem {
 	if !remap.RatingKey(sectionKey).IsValid() {
 		slog.Warn("invalid section key (non-numeric)", "key", sectionKey)

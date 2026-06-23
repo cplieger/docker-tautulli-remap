@@ -1,3 +1,6 @@
+// Package orchestrator coordinates the tautulli-remap workflow, driving
+// history collection, stale-key detection, Plex library indexing, matching,
+// and metadata updates across the Tautulli and Plex APIs.
 package orchestrator
 
 import (
@@ -206,6 +209,10 @@ func (o *Orchestrator) RunScheduler(ctx context.Context, setHealthy func(bool)) 
 	}
 }
 
+// CollectTautulliItems retrieves all unique items from Tautulli watch history,
+// returning a map of rating key to entry. Episodes are stored under their
+// grandparent (show) key; items whose GUID is episode-scoped rather than
+// show-scoped are counted in guidDropped and excluded from the map.
 func (o *Orchestrator) CollectTautulliItems(ctx context.Context) (items map[string]remap.TautulliEntry, guidDropped int) {
 	items = map[string]remap.TautulliEntry{}
 	start := 0
@@ -263,6 +270,8 @@ func (o *Orchestrator) CollectTautulliItems(ctx context.Context) (items map[stri
 	return items, guidDropped
 }
 
+// FindStaleKeys checks each item in the Tautulli history map against the Plex
+// API and returns only the entries whose rating keys no longer exist in Plex.
 func (o *Orchestrator) FindStaleKeys(ctx context.Context, items map[string]remap.TautulliEntry) map[string]remap.TautulliEntry {
 	var mu sync.Mutex
 	stale := map[string]remap.TautulliEntry{}
@@ -290,6 +299,10 @@ func (o *Orchestrator) FindStaleKeys(ctx context.Context, items map[string]remap
 	return stale
 }
 
+// ApplyRemappings updates Tautulli metadata for each matched item and logs
+// all unmatched items. It returns the count of successfully updated records
+// and the count of failures. In dry-run mode it logs what would change
+// without writing to Tautulli.
 func (o *Orchestrator) ApplyRemappings(
 	ctx context.Context,
 	matched []remap.MatchResult,
@@ -351,6 +364,9 @@ func (o *Orchestrator) ApplyRemappings(
 	return updated, failed
 }
 
+// ClearRecentlyAdded removes all entries from Tautulli's recently-added table
+// to prevent stale entries from appearing in the UI after a remap. It is a
+// no-op in dry-run mode.
 func (o *Orchestrator) ClearRecentlyAdded(ctx context.Context) {
 	if o.cfg.DryRun {
 		slog.Info("(dry run) would clear recently added items")

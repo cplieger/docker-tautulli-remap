@@ -1,3 +1,5 @@
+// Package remap implements the matching and indexing logic that maps stale
+// Tautulli rating keys to current Plex rating keys after library reorganizations.
 package remap
 
 import (

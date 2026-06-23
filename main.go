@@ -1,3 +1,6 @@
+// Package main is the entry point for tautulli-remap, a tool that repairs
+// Tautulli watch history after Plex library reorganizations by finding and
+// updating stale rating keys.
 package main
 
 import (
