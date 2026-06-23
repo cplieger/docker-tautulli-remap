@@ -1,3 +1,4 @@
+// Package tautulli provides a client for the Tautulli API v2.
 package tautulli
 
 import (
@@ -78,6 +79,10 @@ func (c *Client) requestURL(cmd string, extra url.Values) string {
 	return c.url + "/api/v2?" + params.Encode()
 }
 
+// API executes a single Tautulli API v2 GET command and returns the raw
+// response body. The API key is embedded in the query string and redacted
+// from any transport error. Callers that need retry logic should use
+// APIWithRetry instead.
 func (c *Client) API(ctx context.Context, cmd string, extra url.Values) ([]byte, error) {
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
@@ -116,6 +121,9 @@ func (c *Client) APIWithRetry(ctx context.Context, cmd string, extra url.Values)
 	return body, nil
 }
 
+// GetHistory fetches one page of Tautulli watch history using the supplied
+// query parameters (start, length, media_type, etc.) and returns a parsed
+// HistoryPage. It retries on transient errors via APIWithRetry.
 func (c *Client) GetHistory(ctx context.Context, params url.Values) (*HistoryPage, error) {
 	body, err := c.APIWithRetry(ctx, "get_history", params)
 	if err != nil {
@@ -134,6 +142,8 @@ func (c *Client) GetHistory(ctx context.Context, params url.Values) (*HistoryPag
 	}, nil
 }
 
+// UpdateMetadata updates the Tautulli history records for a renamed Plex item,
+// replacing all occurrences of oldKey with newKey for the given media type.
 func (c *Client) UpdateMetadata(ctx context.Context, oldKey, newKey string, mediaType remap.MediaType) error {
 	params := url.Values{
 		"old_rating_key": {oldKey},
@@ -154,6 +164,7 @@ func (c *Client) UpdateMetadata(ctx context.Context, oldKey, newKey string, medi
 	return nil
 }
 
+// DeleteRecentlyAdded clears all entries from Tautulli's recently-added table.
 func (c *Client) DeleteRecentlyAdded(ctx context.Context) error {
 	body, err := c.API(ctx, "delete_recently_added", nil)
 	if err != nil {

@@ -9,6 +9,7 @@ import (
 // MediaType represents the type of media item.
 type MediaType string
 
+// Movie, Show, and Episode are the supported Plex media type values.
 const (
 	Movie   MediaType = "movie"
 	Show    MediaType = "show"
@@ -42,6 +43,8 @@ func (m *MediaType) UnmarshalText(text []byte) error {
 // MatchMethod identifies the strategy used to match a stale item.
 type MatchMethod string
 
+// MethodGUID, MethodTitleYear, and MethodTitleOnly enumerate the available
+// matching strategies in increasing order of aggressiveness.
 const (
 	MethodGUID      MatchMethod = "guid"
 	MethodTitleYear MatchMethod = "title+year"
