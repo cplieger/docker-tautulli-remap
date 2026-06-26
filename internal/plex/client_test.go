@@ -42,13 +42,6 @@ func TestItemExists_NotFound(t *testing.T) {
 	}
 }
 
-func TestItemExists_InvalidKey(t *testing.T) {
-	c := New("http://unused", "tok", http.DefaultClient)
-	if c.ItemExists(context.Background(), "abc") {
-		t.Error("expected false for non-numeric key")
-	}
-}
-
 func TestItemExists_RejectsNonNumericKeys(t *testing.T) {
 	c := New("http://localhost:32400", "token", &http.Client{Timeout: 1 * time.Second})
 	tests := []string{"../../../etc/passwd", "abc", "123/../../secret", "", "12 34"}
@@ -87,14 +80,11 @@ func TestItemExists_InvalidURL(t *testing.T) {
 	}
 }
 
-// TestItemExists_WarnsOnlyOnUnexpectedStatus pins the two adjacent negations in
-// the status-code guard `!= StatusOK && != StatusNotFound`. That block only
-// emits a warning log; the return value is decided by the next line, so the
-// existing return-value-only tests let both negation mutants live. Asserting
-// the warning is logged for an unexpected status (500) and NOT logged for the
-// two expected statuses (200, 404) kills both mutants:
-//   - first `!=` -> `==`: would warn on 200 and stay silent on 500
-//   - second `!=` -> `==`: would warn on 404 and stay silent on 500
+// TestItemExists_WarnsOnlyOnUnexpectedStatus pins the warning side-effect of
+// the status-code guard: ItemExists logs "plex check unexpected status" only
+// for statuses other than 200 or 404. The return-value tests above don't
+// observe that warning, so this asserts it fires for an unexpected 500 and
+// stays silent for the two expected statuses (200 and 404).
 func TestItemExists_WarnsOnlyOnUnexpectedStatus(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -387,7 +377,6 @@ func TestLibrarySections_CancelledContext(t *testing.T) {
 	cancel()
 	c := New(srv.URL, "tok", srv.Client())
 	if sections := c.LibrarySections(ctx); sections != nil {
-		// Cancelled context may or may not return nil depending on timing
-		_ = sections
+		t.Errorf("expected nil for cancelled context, got %v", sections)
 	}
 }

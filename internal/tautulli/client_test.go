@@ -295,12 +295,11 @@ func TestGetHistory_APIError(t *testing.T) {
 	}
 }
 
-// TestRetryDelayUnit pins the zero-value-uses-default boundary in
-// retryDelayUnit. The retry-timing tests only exercise this indirectly (and
-// flakily), so a direct table-driven test deterministically catches both the
-// boundary mutant (> 0 -> >= 0, which would return the zero value instead of
-// the default) and the negation mutant (> 0 -> <= 0, which would return the
-// default instead of a configured positive value).
+// TestRetryDelayUnit pins how retryDelayUnit resolves the base retry delay: a
+// zero or negative RetryDelayUnit falls back to the package default, while a
+// positive value is returned unchanged. The retry-timing tests only exercise
+// this indirectly (and flakily), so this table covers the zero/negative/positive
+// boundary directly and deterministically.
 func TestRetryDelayUnit(t *testing.T) {
 	tests := []struct {
 		name string

@@ -26,6 +26,72 @@ func NormalizeTitle(title string) string {
 	return strings.ToLower(strings.TrimSpace(title))
 }
 
+// plexIndex accumulates the three lookup maps (by GUID, by title+year, and by
+// title) while library sections are scanned concurrently. Its mutex guards all
+// three maps so sections can be indexed in parallel.
+type plexIndex struct {
+	byGUID      map[string]PlexEntry
+	byTitleYear map[string]PlexEntry
+	byTitle     map[string]PlexEntry
+	mu          sync.Mutex
+}
+
+func newPlexIndex() *plexIndex {
+	return &plexIndex{
+		byGUID:      map[string]PlexEntry{},
+		byTitleYear: map[string]PlexEntry{},
+		byTitle:     map[string]PlexEntry{},
+	}
+}
+
+// add indexes a single library item under all of its GUIDs, its title+year,
+// and its title. A debug line is emitted when an existing title or title+year
+// key is shadowed by a different rating key.
+func (idx *plexIndex) add(li LibItem, mediaType MediaType) {
+	entry := PlexEntry{
+		RatingKey: strconv.Itoa(li.RatingKey),
+		Title:     li.Title,
+		Year:      strconv.Itoa(li.Year),
+		Type:      mediaType,
+		GUIDs:     li.GUIDs,
+	}
+
+	idx.mu.Lock()
+	defer idx.mu.Unlock()
+
+	for _, g := range li.GUIDs {
+		idx.byGUID[g] = entry
+	}
+
+	normalizedTitle := NormalizeTitle(li.Title)
+	tyKey := normalizedTitle + "|" + entry.Year
+	if prev, ok := idx.byTitleYear[tyKey]; ok && prev.RatingKey != entry.RatingKey {
+		slog.Debug("title+year index shadow",
+			"title", li.Title, "year", entry.Year,
+			"prev_key", prev.RatingKey, "new_key", entry.RatingKey)
+	}
+	idx.byTitleYear[tyKey] = entry
+	if prev, ok := idx.byTitle[normalizedTitle]; ok && prev.RatingKey != entry.RatingKey {
+		slog.Debug("title index shadow",
+			"title", li.Title,
+			"prev_key", prev.RatingKey, "new_key", entry.RatingKey)
+	}
+	idx.byTitle[normalizedTitle] = entry
+}
+
+// scanSection fetches one library section and indexes every item it returns.
+// A cancelled context short-circuits before the fetch.
+func (idx *plexIndex) scanSection(ctx context.Context, plex PlexLibraryFetcher, sec Section) {
+	if ctx.Err() != nil {
+		return
+	}
+	slog.Info("scanning library", "title", sec.Title)
+	mediaType := ParseMediaType(sec.Type)
+	for _, li := range plex.LibraryAll(ctx, sec.Key) {
+		idx.add(li, mediaType)
+	}
+}
+
 // BuildPlexIndex builds three lookup maps (by GUID, by title+year, by title)
 // from the Plex library sections. It fetches sections concurrently up to the
 // given parallelism limit.
@@ -34,13 +100,9 @@ func BuildPlexIndex(ctx context.Context, plex PlexLibraryFetcher, parallelism in
 	byTitleYear map[string]PlexEntry,
 	byTitle map[string]PlexEntry,
 ) {
-	byGUID = map[string]PlexEntry{}
-	byTitleYear = map[string]PlexEntry{}
-	byTitle = map[string]PlexEntry{}
-
+	idx := newPlexIndex()
 	sections := plex.LibrarySections(ctx)
 
-	var mu sync.Mutex
 	g, gctx := errgroup.WithContext(ctx)
 	g.SetLimit(parallelism)
 
@@ -49,45 +111,12 @@ func BuildPlexIndex(ctx context.Context, plex PlexLibraryFetcher, parallelism in
 			continue
 		}
 		g.Go(func() error {
-			if gctx.Err() != nil {
-				return nil
-			}
-			slog.Info("scanning library", "title", sec.Title)
-			libItems := plex.LibraryAll(gctx, sec.Key)
-			for _, li := range libItems {
-				rk := strconv.Itoa(li.RatingKey)
-				y := strconv.Itoa(li.Year)
-				entry := PlexEntry{
-					RatingKey: rk, Title: li.Title,
-					Year: y, Type: ParseMediaType(sec.Type), GUIDs: li.GUIDs,
-				}
-
-				mu.Lock()
-				for _, g := range li.GUIDs {
-					byGUID[g] = entry
-				}
-
-				normalizedTitle := NormalizeTitle(li.Title)
-				tyKey := normalizedTitle + "|" + y
-				if prev, ok := byTitleYear[tyKey]; ok && prev.RatingKey != rk {
-					slog.Debug("title+year index shadow",
-						"title", li.Title, "year", y,
-						"prev_key", prev.RatingKey, "new_key", rk)
-				}
-				byTitleYear[tyKey] = entry
-				if prev, ok := byTitle[normalizedTitle]; ok && prev.RatingKey != rk {
-					slog.Debug("title index shadow",
-						"title", li.Title,
-						"prev_key", prev.RatingKey, "new_key", rk)
-				}
-				byTitle[normalizedTitle] = entry
-				mu.Unlock()
-			}
+			idx.scanSection(gctx, plex, sec)
 			return nil
 		})
 	}
 
 	_ = g.Wait()
 
-	return byGUID, byTitleYear, byTitle
+	return idx.byGUID, idx.byTitleYear, idx.byTitle
 }
