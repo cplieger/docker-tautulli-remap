@@ -153,7 +153,18 @@ func (c *Client) LibraryAll(ctx context.Context, sectionKey string) []LibItem {
 		slog.Error("failed to read Plex library response", "error", err)
 		return nil
 	}
+	items, err := parseLibraryItems(body)
+	if err != nil {
+		slog.Error("failed to parse Plex library", "error", err)
+		return nil
+	}
+	return items
+}
 
+// parseLibraryItems unmarshals a Plex /library/sections/{key}/all response
+// body into LibItems. Entries with a non-numeric rating key are skipped, and
+// each item's GUIDs are normalized (unsupported formats dropped).
+func parseLibraryItems(body []byte) ([]LibItem, error) {
 	var result struct {
 		MediaContainer struct {
 			Metadata []struct {
@@ -168,8 +179,7 @@ func (c *Client) LibraryAll(ctx context.Context, sectionKey string) []LibItem {
 		} `json:"MediaContainer"`
 	}
 	if err := json.Unmarshal(body, &result); err != nil {
-		slog.Error("failed to parse Plex library", "error", err)
-		return nil
+		return nil, err
 	}
 
 	var items []LibItem
@@ -192,5 +202,5 @@ func (c *Client) LibraryAll(ctx context.Context, sectionKey string) []LibItem {
 			RatingKey: rk, Title: m.Title, Year: m.Year, GUIDs: guids,
 		})
 	}
-	return items
+	return items, nil
 }

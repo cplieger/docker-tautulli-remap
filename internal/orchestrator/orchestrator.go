@@ -250,11 +250,7 @@ func (o *Orchestrator) CollectTautulliItems(ctx context.Context) (items map[stri
 			break
 		}
 
-		for i := range page.Rows {
-			if remap.ProcessHistoryRow(&page.Rows[i], items) {
-				guidDropped++
-			}
-		}
+		guidDropped += addHistoryPage(page, items)
 		processed += len(page.Rows)
 
 		start += 1000
@@ -268,6 +264,17 @@ func (o *Orchestrator) CollectTautulliItems(ctx context.Context) (items map[stri
 	}
 
 	return items, guidDropped
+}
+
+// addHistoryPage processes one page of Tautulli history rows into items,
+// returning the number of episode-level GUIDs that had to be dropped.
+func addHistoryPage(page *tautulli.HistoryPage, items map[string]remap.TautulliEntry) (dropped int) {
+	for i := range page.Rows {
+		if remap.ProcessHistoryRow(&page.Rows[i], items) {
+			dropped++
+		}
+	}
+	return dropped
 }
 
 // FindStaleKeys checks each item in the Tautulli history map against the Plex
@@ -308,13 +315,7 @@ func (o *Orchestrator) ApplyRemappings(
 	matched []remap.MatchResult,
 	unmatched []remap.UnmatchResult,
 ) (updated, failed int) {
-	if len(unmatched) > 0 {
-		slog.Info("unmatched items", "count", len(unmatched))
-		for _, u := range unmatched {
-			slog.Warn("no match",
-				"title", u.Title, "year", u.Year, "type", u.MediaType, "key", u.OldKey)
-		}
-	}
+	logUnmatched(unmatched)
 
 	if len(matched) == 0 {
 		slog.Info("no matches found for stale items")
@@ -327,6 +328,25 @@ func (o *Orchestrator) ApplyRemappings(
 		slog.Info("remapping items", "count", len(matched))
 	}
 
+	return o.applyMatched(ctx, matched)
+}
+
+// logUnmatched logs every stale item that no strategy could match.
+func logUnmatched(unmatched []remap.UnmatchResult) {
+	if len(unmatched) == 0 {
+		return
+	}
+	slog.Info("unmatched items", "count", len(unmatched))
+	for _, u := range unmatched {
+		slog.Warn("no match",
+			"title", u.Title, "year", u.Year, "type", u.MediaType, "key", u.OldKey)
+	}
+}
+
+// applyMatched updates Tautulli metadata for each matched item, honoring
+// dry-run mode, context cancellation, and the consecutive-failure circuit
+// breaker. It returns the counts of updated and failed records.
+func (o *Orchestrator) applyMatched(ctx context.Context, matched []remap.MatchResult) (updated, failed int) {
 	perItemLevel := slog.LevelInfo
 	if o.cfg.DryRun {
 		perItemLevel = slog.LevelDebug

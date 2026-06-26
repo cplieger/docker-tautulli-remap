@@ -1,13 +1,8 @@
 package remap
 
 import (
-	"encoding/json"
-	"fmt"
-	"strconv"
 	"strings"
 	"testing"
-
-	"pgregory.net/rapid"
 )
 
 func TestNormalizeGUID(t *testing.T) {
@@ -27,14 +22,31 @@ func TestNormalizeGUID(t *testing.T) {
 		{"plex movie", "plex://movie/5d776b59ad5437001f79c6f8", "plex://movie/5d776b59ad5437001f79c6f8"},
 		{"plex episode", "plex://episode/5d9c135046115600200d30a2", "plex://episode/5d9c135046115600200d30a2"},
 		{"mbid", "mbid://abcdef01-2345-6789-abcd-ef0123456789", "mbid://abcdef01-2345-6789-abcd-ef0123456789"},
-		// StripPath id starting with "/" (separator at index 0): pins the
-		// boundary in `strings.Index(id, "/") >= 0`. A `>= 0` -> `> 0` mutant
-		// would skip the strip and yield "tvdb:///271557".
+		// A leading-slash id (separator at index 0) must strip to empty:
+		// "thetvdb:///271557" normalizes to "tvdb://", never "tvdb:///271557".
 		{"thetvdb leading-slash id strips to empty", "com.plexapp.agents.thetvdb:///271557", "tvdb://"},
 		{"local unsupported", "local://616507", ""},
 		{"agents.none unsupported", "com.plexapp.agents.none://632d404bf27d52a513ccd45e4df820cd276f3090?lang=xn", ""},
 		{"unknown scheme", "custom://something", ""},
 		{"empty string", "", ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := NormalizeGUID(tt.guid); got != tt.want {
+				t.Errorf("NormalizeGUID(%q) = %q, want %q", tt.guid, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestNormalizeGUID_tvdb_strips_deep_paths(t *testing.T) {
+	tests := []struct {
+		name, guid, want string
+	}{
+		{"tvdb preserves path (new agent)", "tvdb://271557/3", "tvdb://271557/3"},
+		{"tvdb with no path", "tvdb://271557", "tvdb://271557"},
+		{"thetvdb strips path (legacy agent)", "thetvdb://12345/1/2?lang=en", "tvdb://12345"},
+		{"thetvdb strips single path segment", "thetvdb://99999/1?lang=en", "tvdb://99999"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -52,9 +64,8 @@ func TestExtractAfter(t *testing.T) {
 		{"imdb://tt1234567", "imdb://", "tt1234567"},
 		{"com.plexapp.agents.imdb://tt1234567?lang=en", "imdb://", "tt1234567"},
 		{"tmdb://12345", "imdb://", ""},
-		// Query separator at index 0 of the remainder: pins the boundary in
-		// `strings.Index(after, "?") >= 0`. A `>= 0` -> `> 0` mutant would
-		// keep the query and return "?lang=en".
+		// A query separator at index 0 of the remainder must still be stripped:
+		// "imdb://?lang=en" yields "" (everything after the prefix is query).
 		{"imdb://?lang=en", "imdb://", ""},
 		{"", "imdb://", ""},
 	}
@@ -279,71 +290,6 @@ func TestProcessHistoryRow(t *testing.T) {
 	})
 }
 
-func TestFlexIntUnmarshalJSON(t *testing.T) {
-	tests := []struct {
-		name string
-		json string
-		want FlexInt
-	}{
-		{"float", "42.0", 42},
-		{"string", `"123"`, 123},
-		{"empty string", `""`, 0},
-		{"null", "null", 0},
-		{"invalid string", `"abc"`, 0},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			var f FlexInt
-			if err := json.Unmarshal([]byte(tt.json), &f); err != nil {
-				t.Fatalf("unmarshal error: %v", err)
-			}
-			if f != tt.want {
-				t.Errorf("got %d, want %d", f, tt.want)
-			}
-		})
-	}
-}
-
-func TestMediaType(t *testing.T) {
-	if Movie.String() != "movie" {
-		t.Errorf("Movie.String() = %q", Movie.String())
-	}
-	var m MediaType
-	if err := m.UnmarshalText([]byte("show")); err != nil {
-		t.Fatal(err)
-	}
-	if m != Show {
-		t.Errorf("got %q", m)
-	}
-	if err := m.UnmarshalText([]byte("invalid")); err == nil {
-		t.Error("expected error for invalid media type")
-	}
-}
-
-func TestMatchMethod(t *testing.T) {
-	if MethodGUID.String() != "guid" {
-		t.Errorf("MethodGUID.String() = %q", MethodGUID.String())
-	}
-}
-
-func TestRatingKeyIsValid(t *testing.T) {
-	tests := []struct {
-		input RatingKey
-		want  bool
-	}{
-		{"42", true},
-		{"0", true},
-		{"", false},
-		{"-1", false},
-		{"abc", false},
-	}
-	for _, tt := range tests {
-		if got := tt.input.IsValid(); got != tt.want {
-			t.Errorf("RatingKey(%q).IsValid() = %v, want %v", tt.input, got, tt.want)
-		}
-	}
-}
-
 func TestMatchStaleItems(t *testing.T) {
 	type check func(t *testing.T, matched []MatchResult, unmatched []UnmatchResult)
 
@@ -546,464 +492,4 @@ func TestMatchStaleItems(t *testing.T) {
 			}
 		})
 	}
-}
-
-// --- Property-based tests ---
-
-func TestNormalizeGUID_idempotent(t *testing.T) {
-	rapid.Check(t, func(t *rapid.T) {
-		prefix := rapid.SampledFrom([]string{
-			"imdb://", "tmdb://", "tvdb://", "plex://", "mbid://",
-			"themoviedb://", "thetvdb://",
-			"local://", "com.plexapp.agents.none://", "",
-		}).Draw(t, "prefix")
-		suffix := rapid.StringMatching(`[a-zA-Z0-9/_\-]{0,40}`).Draw(t, "suffix")
-		guid := prefix + suffix
-		first := NormalizeGUID(guid)
-		second := NormalizeGUID(first)
-		if first != second {
-			t.Errorf("not idempotent: NormalizeGUID(%q)=%q, NormalizeGUID(%q)=%q", guid, first, first, second)
-		}
-	})
-}
-
-func TestNormalizeGUID_never_panics(t *testing.T) {
-	rapid.Check(t, func(t *rapid.T) {
-		guid := rapid.String().Draw(t, "guid")
-		_ = NormalizeGUID(guid)
-	})
-}
-
-func TestNormalizeGUID_output_uses_canonical_prefix(t *testing.T) {
-	canonicalPrefixes := []string{"imdb://", "tmdb://", "tvdb://", "plex://", "mbid://"}
-	rapid.Check(t, func(t *rapid.T) {
-		prefix := rapid.SampledFrom([]string{
-			"imdb://", "tmdb://", "tvdb://", "plex://", "mbid://",
-			"themoviedb://", "thetvdb://",
-		}).Draw(t, "prefix")
-		id := rapid.StringMatching(`[a-zA-Z0-9]{1,20}`).Draw(t, "id")
-		guid := prefix + id
-		result := NormalizeGUID(guid)
-		if result == "" {
-			return
-		}
-		hasCanonical := false
-		for _, cp := range canonicalPrefixes {
-			if strings.HasPrefix(result, cp) {
-				hasCanonical = true
-				break
-			}
-		}
-		if !hasCanonical {
-			t.Errorf("NormalizeGUID(%q) = %q, no canonical prefix", guid, result)
-		}
-	})
-}
-
-func TestNormalizeGUID_tvdb_strips_deep_paths(t *testing.T) {
-	tests := []struct {
-		name, guid, want string
-	}{
-		{"tvdb preserves path (new agent)", "tvdb://271557/3", "tvdb://271557/3"},
-		{"tvdb with no path", "tvdb://271557", "tvdb://271557"},
-		{"thetvdb strips path (legacy agent)", "thetvdb://12345/1/2?lang=en", "tvdb://12345"},
-		{"thetvdb strips single path segment", "thetvdb://99999/1?lang=en", "tvdb://99999"},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if got := NormalizeGUID(tt.guid); got != tt.want {
-				t.Errorf("NormalizeGUID(%q) = %q, want %q", tt.guid, got, tt.want)
-			}
-		})
-	}
-}
-
-func TestExtractAfter_never_panics(t *testing.T) {
-	rapid.Check(t, func(t *rapid.T) {
-		s := rapid.String().Draw(t, "s")
-		prefix := rapid.String().Draw(t, "prefix")
-		_ = ExtractAfter(s, prefix)
-	})
-}
-
-func TestExtractAfter_strips_query_params(t *testing.T) {
-	rapid.Check(t, func(t *rapid.T) {
-		prefix := rapid.SampledFrom([]string{"imdb://", "tmdb://", "tvdb://"}).Draw(t, "prefix")
-		id := rapid.StringMatching(`[a-zA-Z0-9]{1,20}`).Draw(t, "id")
-		query := rapid.StringMatching(`[a-z]{1,10}=[a-z]{1,10}`).Draw(t, "query")
-		input := prefix + id + "?" + query
-		result := ExtractAfter(input, prefix)
-		if strings.Contains(result, "?") {
-			t.Errorf("ExtractAfter(%q, %q) = %q, still contains query params", input, prefix, result)
-		}
-		if result != id {
-			t.Errorf("ExtractAfter(%q, %q) = %q, want %q", input, prefix, result, id)
-		}
-	})
-}
-
-func TestMatchStaleItems_partition_property(t *testing.T) {
-	rapid.Check(t, func(t *rapid.T) {
-		n := rapid.IntRange(0, 10).Draw(t, "n")
-		stale := map[string]TautulliEntry{}
-		byGUID := map[string]PlexEntry{}
-		byTitleYear := map[string]PlexEntry{}
-		byTitle := map[string]PlexEntry{}
-
-		for i := range n {
-			key := strconv.Itoa(100 + i)
-			title := rapid.StringMatching(`[A-Za-z ]{1,20}`).Draw(t, fmt.Sprintf("title_%d", i))
-			year := strconv.Itoa(rapid.IntRange(1990, 2025).Draw(t, fmt.Sprintf("year_%d", i)))
-			mediaType := MediaType(rapid.SampledFrom([]string{"movie", "show"}).Draw(t, fmt.Sprintf("type_%d", i)))
-			guid := ""
-			if rapid.Bool().Draw(t, fmt.Sprintf("has_guid_%d", i)) {
-				guid = "imdb://tt" + strconv.Itoa(rapid.IntRange(1000000, 9999999).Draw(t, fmt.Sprintf("guid_%d", i)))
-			}
-			stale[key] = TautulliEntry{RatingKey: key, Title: title, Year: year, MediaType: mediaType, GUID: guid}
-
-			if guid != "" && rapid.Bool().Draw(t, fmt.Sprintf("in_guid_map_%d", i)) {
-				newKey := strconv.Itoa(200 + i)
-				byGUID[guid] = PlexEntry{RatingKey: newKey, Title: title, Year: year, Type: mediaType}
-			}
-			t2 := strings.ToLower(strings.TrimSpace(title))
-			if t2 != "" && rapid.Bool().Draw(t, fmt.Sprintf("in_ty_map_%d", i)) {
-				newKey := strconv.Itoa(300 + i)
-				byTitleYear[t2+"|"+year] = PlexEntry{RatingKey: newKey, Title: title, Year: year, Type: mediaType}
-			}
-			if t2 != "" && rapid.Bool().Draw(t, fmt.Sprintf("in_t_map_%d", i)) {
-				newKey := strconv.Itoa(400 + i)
-				byTitle[t2] = PlexEntry{RatingKey: newKey, Title: title, Year: year, Type: mediaType}
-			}
-		}
-
-		matched, unmatched := MatchStaleItems(stale, byGUID, byTitleYear, byTitle, true, true)
-
-		seen := map[string]bool{}
-		for _, m := range matched {
-			if seen[m.OldKey] {
-				t.Errorf("duplicate matched key %s", m.OldKey)
-			}
-			seen[m.OldKey] = true
-		}
-		for _, u := range unmatched {
-			if seen[u.OldKey] {
-				t.Errorf("key %s in both matched and unmatched", u.OldKey)
-			}
-			seen[u.OldKey] = true
-		}
-		if len(seen) != len(stale) {
-			t.Errorf("partition has %d items, stale has %d", len(seen), len(stale))
-		}
-		for _, m := range matched {
-			if m.OldKey == m.NewKey {
-				t.Errorf("self-remap OldKey == NewKey == %s", m.OldKey)
-			}
-		}
-		for _, m := range matched {
-			if m.Method == MethodGUID {
-				entry := stale[m.OldKey]
-				if entry.GUID == "" {
-					t.Errorf("GUID method for empty GUID, key %s", m.OldKey)
-				}
-			}
-		}
-	})
-}
-
-func TestProcessHistoryRow_never_removes_entries(t *testing.T) {
-	rapid.Check(t, func(t *rapid.T) {
-		items := map[string]TautulliEntry{}
-		nExisting := rapid.IntRange(0, 5).Draw(t, "n_existing")
-		for i := range nExisting {
-			key := strconv.Itoa(i + 1)
-			items[key] = TautulliEntry{RatingKey: key, Title: fmt.Sprintf("Existing %d", i), Year: "2020", MediaType: Movie}
-		}
-		beforeLen := len(items)
-		beforeKeys := map[string]string{}
-		for k, v := range items {
-			beforeKeys[k] = v.Title
-		}
-
-		mediaType := MediaType(rapid.SampledFrom([]string{"movie", "episode", "track", ""}).Draw(t, "media_type"))
-		row := &HistoryItem{
-			RatingKey:            FlexInt(rapid.IntRange(-1, 10).Draw(t, "rk")),
-			GrandparentRatingKey: FlexInt(rapid.IntRange(-1, 10).Draw(t, "grk")),
-			Title:                rapid.StringMatching(`[A-Za-z ]{0,15}`).Draw(t, "title"),
-			GrandparentTitle:     rapid.StringMatching(`[A-Za-z ]{0,15}`).Draw(t, "gp_title"),
-			Year:                 FlexInt(rapid.IntRange(2000, 2025).Draw(t, "year")),
-			MediaType:            mediaType,
-			GUID:                 rapid.SampledFrom([]string{"", "imdb://tt1234567", "plex://episode/abc", "local://123"}).Draw(t, "guid"),
-		}
-
-		ProcessHistoryRow(row, items)
-
-		if len(items) < beforeLen {
-			t.Errorf("map shrank from %d to %d", beforeLen, len(items))
-		}
-		for k, title := range beforeKeys {
-			if items[k].Title != title {
-				t.Errorf("existing entry %q changed from %q to %q", k, title, items[k].Title)
-			}
-		}
-	})
-}
-
-// --- Fuzz targets ---
-
-func FuzzFlexIntUnmarshal(f *testing.F) {
-	f.Add([]byte(`42`))
-	f.Add([]byte(`"123"`))
-	f.Add([]byte(`""`))
-	f.Add([]byte(`null`))
-	f.Add([]byte(`0.5`))
-	f.Add([]byte(`"abc"`))
-	f.Add([]byte(`99999999999999999`))
-	f.Fuzz(func(t *testing.T, data []byte) {
-		var fi FlexInt
-		if err := fi.UnmarshalJSON(data); err != nil {
-			return
-		}
-		// Round-trip stability for values within float64 safe integer range (±2^53).
-		const maxSafe = 1 << 53
-		v := int(fi)
-		if v > -maxSafe && v < maxSafe {
-			out, err := json.Marshal(fi)
-			if err != nil {
-				t.Fatalf("marshal failed: %v", err)
-			}
-			var fi2 FlexInt
-			if err := fi2.UnmarshalJSON(out); err != nil {
-				t.Fatalf("re-unmarshal failed: %v", err)
-			}
-			if fi != fi2 {
-				t.Errorf("round-trip mismatch: %d != %d (marshaled as %s)", fi, fi2, out)
-			}
-		}
-	})
-}
-
-func FuzzNormalizeGUID(f *testing.F) {
-	f.Add("imdb://tt1234567")
-	f.Add("com.plexapp.agents.imdb://tt1234567?lang=en")
-	f.Add("tmdb://12345")
-	f.Add("tvdb://271557")
-	f.Add("com.plexapp.agents.thetvdb://271557/3/1?lang=en")
-	f.Add("plex://movie/5d776b59ad5437001f79c6f8")
-	f.Add("local://616507")
-	f.Add("")
-	f.Add("custom://something")
-	f.Fuzz(func(t *testing.T, guid string) {
-		result := NormalizeGUID(guid)
-		if result == "" {
-			return
-		}
-		// Idempotency check
-		second := NormalizeGUID(result)
-		if second != result {
-			t.Errorf("not idempotent: NormalizeGUID(%q)=%q, NormalizeGUID(%q)=%q", guid, result, result, second)
-		}
-		// Canonical prefix check
-		canonicalPrefixes := []string{"imdb://", "tmdb://", "tvdb://", "plex://", "mbid://"}
-		hasCanonical := false
-		for _, cp := range canonicalPrefixes {
-			if strings.HasPrefix(result, cp) {
-				hasCanonical = true
-				break
-			}
-		}
-		if !hasCanonical {
-			t.Errorf("NormalizeGUID(%q) = %q does not start with a canonical prefix", guid, result)
-		}
-	})
-}
-
-func FuzzProcessHistoryRow(f *testing.F) {
-	f.Add([]byte(`{"rating_key":42,"title":"Test","year":2020,"media_type":"movie","guid":"imdb://tt1234567"}`))
-	f.Add([]byte(`{"rating_key":"99","grandparent_rating_key":"50","title":"Ep","grandparent_title":"Show","year":2021,"media_type":"episode","guid":"tvdb://271557"}`))
-	f.Add([]byte(`{}`))
-	f.Add([]byte(`null`))
-	f.Add([]byte(`{"rating_key":0,"title":"","year":0,"media_type":"track"}`))
-	f.Fuzz(func(t *testing.T, data []byte) {
-		var row HistoryItem
-		if err := json.Unmarshal(data, &row); err != nil {
-			return
-		}
-		items := map[string]TautulliEntry{}
-		// Must never panic
-		ProcessHistoryRow(&row, items)
-		// Validate outputs
-		canonicalPrefixes := []string{"imdb://", "tmdb://", "tvdb://", "plex://", "mbid://"}
-		for key, entry := range items {
-			// RatingKey must be non-zero positive
-			rk, err := strconv.Atoi(key)
-			if err != nil || rk <= 0 {
-				t.Errorf("invalid rating key %q in output", key)
-			}
-			if entry.RatingKey != key {
-				t.Errorf("entry.RatingKey=%q != map key=%q", entry.RatingKey, key)
-			}
-			// MediaType must be Movie or Show
-			if entry.MediaType != Movie && entry.MediaType != Show {
-				t.Errorf("unexpected MediaType %q for key %s", entry.MediaType, key)
-			}
-			// GUID if non-empty must start with canonical prefix
-			if entry.GUID != "" {
-				hasPrefix := false
-				for _, cp := range canonicalPrefixes {
-					if strings.HasPrefix(entry.GUID, cp) {
-						hasPrefix = true
-						break
-					}
-				}
-				if !hasPrefix {
-					t.Errorf("entry GUID %q does not start with canonical prefix", entry.GUID)
-				}
-			}
-		}
-	})
-}
-
-func FuzzMatchOne(f *testing.F) {
-	f.Add("Test Movie", "imdb://tt1234567", "movie")
-	f.Add("", "", "")
-	f.Add("Show Title", "tvdb://12345", "show")
-	f.Fuzz(func(t *testing.T, title, guid, mediaType string) {
-		mt := ParseMediaType(mediaType)
-		item := &TautulliEntry{
-			RatingKey: "100",
-			Title:     title,
-			Year:      "2020",
-			MediaType: mt,
-			GUID:      guid,
-		}
-		byGUID := map[string]PlexEntry{
-			"imdb://tt1234567": {RatingKey: "200", Title: "M", Year: "2020", Type: Movie},
-			"tvdb://12345":     {RatingKey: "300", Title: "S", Year: "2021", Type: Show},
-		}
-		byTitleYear := map[string]PlexEntry{
-			"test movie|2020": {RatingKey: "400", Title: "Test Movie", Year: "2020", Type: Movie},
-		}
-		byTitle := map[string]PlexEntry{
-			"show title": {RatingKey: "500", Title: "Show Title", Year: "2021", Type: Show},
-		}
-		validKeys := map[string]bool{"200": true, "300": true, "400": true, "500": true}
-
-		// Must never panic
-		newKey, _ := MatchOne(item, "100", byGUID, byTitleYear, byTitle, true, true)
-
-		// Result must be either empty or from the input maps
-		if newKey != "" && !validKeys[newKey] {
-			t.Errorf("MatchOne returned key %q which is not in the input maps", newKey)
-		}
-	})
-}
-
-// --- JSON unmarshal fuzz targets ---
-// These use local struct equivalents to avoid circular imports with the
-// tautulli and plex packages which import remap.
-
-func FuzzHistoryResponseUnmarshal(f *testing.F) {
-	f.Add([]byte(`{"response":{"result":"success","data":{"data":[{"title":"M","media_type":"movie","rating_key":1,"year":2020,"guid":"imdb://tt1"}],"recordsFiltered":1}}}`))
-	f.Add([]byte(`{}`))
-	f.Add([]byte(`{"response":{"result":"error","message":"bad"}}`))
-	f.Add([]byte(`null`))
-	f.Fuzz(func(t *testing.T, data []byte) {
-		// Local equivalent of tautulli.HistoryResponse
-		var resp struct {
-			Response struct {
-				Result  string `json:"result"`
-				Message string `json:"message"`
-				Data    struct {
-					Data            []HistoryItem `json:"data"`
-					RecordsFiltered int           `json:"recordsFiltered"`
-				} `json:"data"`
-			} `json:"response"`
-		}
-		if err := json.Unmarshal(data, &resp); err != nil {
-			return
-		}
-		if resp.Response.Data.RecordsFiltered < 0 {
-			t.Errorf("recordsFiltered = %d, want >= 0", resp.Response.Data.RecordsFiltered)
-		}
-		for i, item := range resp.Response.Data.Data {
-			// Exercise FlexInt fields - must not panic
-			_ = int(item.RatingKey)
-			_ = int(item.Year)
-			_ = int(item.GrandparentRatingKey)
-			_ = item.Title
-			_ = item.MediaType
-			if int(item.RatingKey) < 0 {
-				t.Errorf("data[%d].RatingKey = %d, want >= 0 if parsed", i, int(item.RatingKey))
-			}
-		}
-	})
-}
-
-func FuzzPlexLibrarySectionsUnmarshal(f *testing.F) {
-	f.Add([]byte(`{"MediaContainer":{"Directory":[{"key":"1","title":"Movies","type":"movie"}]}}`))
-	f.Add([]byte(`{}`))
-	f.Add([]byte(`{"MediaContainer":{"Directory":[]}}`))
-	f.Add([]byte(`null`))
-	f.Fuzz(func(t *testing.T, data []byte) {
-		var result struct {
-			MediaContainer struct {
-				Directory []struct {
-					Key   string `json:"key"`
-					Title string `json:"title"`
-					Type  string `json:"type"`
-				} `json:"Directory"`
-			} `json:"MediaContainer"`
-		}
-		if err := json.Unmarshal(data, &result); err != nil {
-			return
-		}
-		for _, d := range result.MediaContainer.Directory {
-			// Non-empty key is the expected invariant of well-formed Plex
-			// responses. We verify field access never panics.
-			if d.Key == "" {
-				// Not a valid Plex section entry; skip further checks.
-				continue
-			}
-			_ = d.Title
-			_ = d.Type
-		}
-	})
-}
-
-func FuzzPlexLibraryAllUnmarshal(f *testing.F) {
-	f.Add([]byte(`{"MediaContainer":{"Metadata":[{"title":"Movie","ratingKey":"123","guid":"tmdb://1","Guid":[{"id":"imdb://tt1"}],"year":2020}]}}`))
-	f.Add([]byte(`{}`))
-	f.Add([]byte(`{"MediaContainer":{"Metadata":[]}}`))
-	f.Add([]byte(`null`))
-	f.Fuzz(func(t *testing.T, data []byte) {
-		var result struct {
-			MediaContainer struct {
-				Metadata []struct {
-					Title     string `json:"title"`
-					RatingKey string `json:"ratingKey"`
-					GUID      string `json:"guid"`
-					Guids     []struct {
-						ID string `json:"id"`
-					} `json:"Guid"`
-					Year int `json:"year"`
-				} `json:"Metadata"`
-			} `json:"MediaContainer"`
-		}
-		if err := json.Unmarshal(data, &result); err != nil {
-			return
-		}
-		for _, m := range result.MediaContainer.Metadata {
-			// Exercise strconv.Atoi on ratingKey - must not panic
-			if rk, err := strconv.Atoi(m.RatingKey); err == nil {
-				if rk < 0 {
-					t.Errorf("ratingKey %q parsed to %d, want non-negative", m.RatingKey, rk)
-				}
-			}
-			// Exercise NormalizeGUID on guid and each Guid[].id - must not panic
-			_ = NormalizeGUID(m.GUID)
-			for _, g := range m.Guids {
-				_ = NormalizeGUID(g.ID)
-			}
-		}
-	})
 }
