@@ -94,3 +94,33 @@ func TestRatingKeyIsValid(t *testing.T) {
 		}
 	}
 }
+
+func TestFlexIntUnmarshalJSON_nonNumericTypesCoerceToZero(t *testing.T) {
+	tests := []struct {
+		name string
+		json string
+	}{
+		{"bool true", "true"},
+		{"bool false", "false"},
+		{"array", "[1,2,3]"},
+		{"object", `{"a":1}`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			f := FlexInt(99)
+			if err := f.UnmarshalJSON([]byte(tt.json)); err != nil {
+				t.Fatalf("UnmarshalJSON(%s) unexpected error: %v", tt.json, err)
+			}
+			if f != 0 {
+				t.Errorf("UnmarshalJSON(%s) = %d, want 0 (non-numeric JSON coerces to zero)", tt.json, f)
+			}
+		})
+	}
+}
+
+func TestFlexIntUnmarshalJSON_malformedReturnsError(t *testing.T) {
+	var f FlexInt
+	if err := f.UnmarshalJSON([]byte("{")); err == nil {
+		t.Error("UnmarshalJSON of malformed JSON should return an error")
+	}
+}

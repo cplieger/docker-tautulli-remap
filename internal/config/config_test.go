@@ -2,6 +2,7 @@ package config
 
 import (
 	"bytes"
+	"fmt"
 	"log/slog"
 	"strings"
 	"testing"
@@ -37,6 +38,15 @@ func TestLoad(t *testing.T) {
 	if cfg.ScheduleInterval != 12*time.Hour {
 		t.Errorf("ScheduleInterval = %v, want 12h", cfg.ScheduleInterval)
 	}
+	if cfg.TautulliAPIKey != "test-key" {
+		t.Errorf("TautulliAPIKey = %q, want %q", cfg.TautulliAPIKey, "test-key")
+	}
+	if cfg.PlexURL != "http://localhost:32400" {
+		t.Errorf("PlexURL = %q, want %q", cfg.PlexURL, "http://localhost:32400")
+	}
+	if cfg.PlexToken != "test-token" {
+		t.Errorf("PlexToken = %q, want %q", cfg.PlexToken, "test-token")
+	}
 }
 
 func TestLoadDefaults(t *testing.T) {
@@ -70,23 +80,33 @@ func TestLoadDefaults(t *testing.T) {
 	}
 }
 
-func TestLoadMissingAPIKey(t *testing.T) {
-	t.Setenv("TAUTULLI_APIKEY", "")
-	t.Setenv("PLEX_TOKEN", "token")
-
-	_, err := Load()
-	if err == nil {
-		t.Error("expected error for missing TAUTULLI_APIKEY")
+func TestLoad_MissingRequiredEnv(t *testing.T) {
+	tests := []struct {
+		name      string
+		apiKey    string
+		plexToken string
+		wantKey   string
+	}{
+		{"missing api key", "", "token", "TAUTULLI_APIKEY"},
+		{"missing plex token", "key", "", "PLEX_TOKEN"},
 	}
-}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("TAUTULLI_APIKEY", tt.apiKey)
+			t.Setenv("PLEX_TOKEN", tt.plexToken)
 
-func TestLoadMissingPlexToken(t *testing.T) {
-	t.Setenv("TAUTULLI_APIKEY", "key")
-	t.Setenv("PLEX_TOKEN", "")
-
-	_, err := Load()
-	if err == nil {
-		t.Error("expected error for missing PLEX_TOKEN")
+			_, err := Load()
+			merr, ok := err.(*MissingEnvError)
+			if !ok {
+				t.Fatalf("Load() error = %v (%T), want *MissingEnvError", err, err)
+			}
+			if merr.Key != tt.wantKey {
+				t.Errorf("MissingEnvError.Key = %q, want %q", merr.Key, tt.wantKey)
+			}
+			if !strings.Contains(err.Error(), tt.wantKey) {
+				t.Errorf("error message %q does not mention %q", err.Error(), tt.wantKey)
+			}
+		})
 	}
 }
 
@@ -110,11 +130,13 @@ func TestGetEnvBool(t *testing.T) {
 		{"maybe", false, false},
 	}
 	for _, tt := range tests {
-		t.Setenv("TEST_BOOL", tt.value)
-		got := GetEnvBool("TEST_BOOL", tt.defaultVal)
-		if got != tt.want {
-			t.Errorf("GetEnvBool(%q, %v) = %v, want %v", tt.value, tt.defaultVal, got, tt.want)
-		}
+		t.Run(fmt.Sprintf("%q_default=%v", tt.value, tt.defaultVal), func(t *testing.T) {
+			t.Setenv("TEST_BOOL", tt.value)
+			got := getEnvBool("TEST_BOOL", tt.defaultVal)
+			if got != tt.want {
+				t.Errorf("getEnvBool(%q, %v) = %v, want %v", tt.value, tt.defaultVal, got, tt.want)
+			}
+		})
 	}
 }
 
@@ -168,6 +190,7 @@ func TestParseScheduleInterval(t *testing.T) {
 		{"whitespace only normalizes to empty", "   ", 0},
 		{"positive duration passes through", "24h", 24 * time.Hour},
 		{"compound duration passes through", "6h30m", 6*time.Hour + 30*time.Minute},
+		{"surrounding spaces on a duration parse", " 24h ", 24 * time.Hour},
 		{"parseable zero hours accepted silently", "0h", 0},
 		{"parseable zero ms accepted silently", "0ms", 0},
 	}
@@ -211,6 +234,133 @@ func TestParseScheduleInterval_rejectsInvalid(t *testing.T) {
 			}
 			if logs := getLogs(); !strings.Contains(logs, tt.wantWarning) {
 				t.Errorf("parseScheduleInterval(%q) missing %q warning; logs=%q", tt.raw, tt.wantWarning, logs)
+			}
+		})
+	}
+}
+
+// TestLogConfig_LogsScheduleMode pins the schedule-mode label LogConfig emits:
+// the "resident-idle" sentinel when the interval is zero, and the duration's
+// String() form when scheduled. It guards the cfg.ScheduleInterval > 0 branch
+// (a >= 0 mutation would log "0s" instead of "resident-idle").
+func TestLogConfig_LogsScheduleMode(t *testing.T) {
+	tests := []struct {
+		name     string
+		interval time.Duration
+		wantMode string
+	}{
+		{"resident-idle when interval is zero", 0, "resident-idle"},
+		{"duration string when scheduled", 24 * time.Hour, "24h0m0s"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			getLogs := captureLogs(t)
+			LogConfig(&Config{ScheduleInterval: tt.interval})
+			if logs := getLogs(); !strings.Contains(logs, "schedule_interval="+tt.wantMode) {
+				t.Errorf("LogConfig logged %q, want schedule_interval=%q", logs, tt.wantMode)
+			}
+		})
+	}
+}
+
+// TestLogConfig_neverLogsSecrets pins the documented "API tokens are never
+// logged" contract: LogConfig emits URLs, dry-run, fallbacks, and the schedule
+// mode, but must never place the Tautulli API key or Plex token into a log
+// attribute.
+func TestLogConfig_neverLogsSecrets(t *testing.T) {
+	const (
+		apiKey = "SECRET-TAUTULLI-APIKEY-sentinel"
+		token  = "SECRET-PLEX-TOKEN-sentinel"
+	)
+	getLogs := captureLogs(t)
+	LogConfig(&Config{
+		TautulliURL:      "http://tautulli:8181",
+		TautulliAPIKey:   apiKey,
+		PlexURL:          "http://plex:32400",
+		PlexToken:        token,
+		ScheduleInterval: 24 * time.Hour,
+	})
+	logs := getLogs()
+	if strings.Contains(logs, apiKey) {
+		t.Errorf("LogConfig leaked the Tautulli API key into logs: %q", logs)
+	}
+	if strings.Contains(logs, token) {
+		t.Errorf("LogConfig leaked the Plex token into logs: %q", logs)
+	}
+}
+
+func TestGetEnvBool_normalizesInputAndWarns(t *testing.T) {
+	tests := []struct {
+		name       string
+		value      string
+		defaultVal bool
+		want       bool
+		wantWarn   bool
+	}{
+		{"uppercase TRUE with surrounding spaces", " TRUE ", false, true, false},
+		{"mixed-case False with spaces", "  False  ", true, false, false},
+		{"capitalized Yes", "Yes", false, true, false},
+		{"uppercase ON", "ON", false, true, false},
+		{"capitalized No", "No", true, false, false},
+		{"uppercase OFF", "OFF", true, false, false},
+		{"unrecognized value warns, returns default true", "maybe", true, true, true},
+		{"unrecognized value warns, returns default false", "perhaps", false, false, true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			getLogs := captureLogs(t)
+			t.Setenv("TEST_BOOL", tt.value)
+			got := getEnvBool("TEST_BOOL", tt.defaultVal)
+			if got != tt.want {
+				t.Errorf("getEnvBool(%q, %v) = %v, want %v", tt.value, tt.defaultVal, got, tt.want)
+			}
+			warned := strings.Contains(getLogs(), "unrecognized boolean value")
+			if warned != tt.wantWarn {
+				t.Errorf("getEnvBool(%q) warned = %v, want %v", tt.value, warned, tt.wantWarn)
+			}
+		})
+	}
+}
+
+func TestLogConfig_logsConfigAttributes(t *testing.T) {
+	live := Config{
+		TautulliURL:       "http://tautulli:8181",
+		PlexURL:           "http://plex:32400",
+		DryRun:            false,
+		FallbackTitleYear: true,
+		FallbackTitleOnly: true,
+		ScheduleInterval:  24 * time.Hour,
+	}
+	dry := Config{
+		TautulliURL:       "http://localhost:8181",
+		PlexURL:           "http://localhost:32400",
+		DryRun:            true,
+		FallbackTitleYear: false,
+		FallbackTitleOnly: false,
+	}
+	tests := []struct {
+		name string
+		cfg  Config
+		want string
+	}{
+		{"live mode logs tautulli_url", live, "tautulli_url=http://tautulli:8181"},
+		{"live mode logs plex_url", live, "plex_url=http://plex:32400"},
+		{"live mode logs dry_run=false", live, "dry_run=false"},
+		{"live mode logs fallback_title_year=true", live, "fallback_title_year=true"},
+		{"live mode logs fallback_title_only=true", live, "fallback_title_only=true"},
+		{"dry-run mode logs dry_run=true", dry, "dry_run=true"},
+		{"dry-run mode logs fallback_title_year=false", dry, "fallback_title_year=false"},
+		{"dry-run mode logs fallback_title_only=false", dry, "fallback_title_only=false"},
+		{"dry-run mode logs tautulli_url", dry, "tautulli_url=http://localhost:8181"},
+		{"dry-run mode logs plex_url", dry, "plex_url=http://localhost:32400"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			getLogs := captureLogs(t)
+			cfg := tt.cfg
+			LogConfig(&cfg)
+			if logs := getLogs(); !strings.Contains(logs, tt.want) {
+				t.Errorf("LogConfig missing %q; logs=%q", tt.want, logs)
 			}
 		})
 	}

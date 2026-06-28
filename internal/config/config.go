@@ -25,11 +25,11 @@ type Config struct {
 func Load() (*Config, error) {
 	interval := parseScheduleInterval(getEnv("SCHEDULE_INTERVAL", "off"))
 
-	apiKey := requireEnv("TAUTULLI_APIKEY")
+	apiKey := os.Getenv("TAUTULLI_APIKEY")
 	if apiKey == "" {
 		return nil, &MissingEnvError{Key: "TAUTULLI_APIKEY"}
 	}
-	token := requireEnv("PLEX_TOKEN")
+	token := os.Getenv("PLEX_TOKEN")
 	if token == "" {
 		return nil, &MissingEnvError{Key: "PLEX_TOKEN"}
 	}
@@ -40,9 +40,9 @@ func Load() (*Config, error) {
 		PlexURL:           getEnv("PLEX_URL", "http://plex:32400"),
 		PlexToken:         token,
 		ScheduleInterval:  interval,
-		DryRun:            GetEnvBool("DRY_RUN", true),
-		FallbackTitleYear: GetEnvBool("FALLBACK_TITLE_YEAR", true),
-		FallbackTitleOnly: GetEnvBool("FALLBACK_TITLE_ONLY", false),
+		DryRun:            getEnvBool("DRY_RUN", true),
+		FallbackTitleYear: getEnvBool("FALLBACK_TITLE_YEAR", true),
+		FallbackTitleOnly: getEnvBool("FALLBACK_TITLE_ONLY", false),
 	}, nil
 }
 
@@ -50,11 +50,12 @@ func Load() (*Config, error) {
 // (e.g. "24h", "6h30m") or the sentinels "off"/"disabled"/"0"/"0s" which
 // all map to 0 (resident-idle mode). Unparseable values warn and default to off.
 func parseScheduleInterval(raw string) time.Duration {
-	switch strings.ToLower(strings.TrimSpace(raw)) {
+	trimmed := strings.TrimSpace(raw)
+	switch strings.ToLower(trimmed) {
 	case "", "off", "disabled", "0", "0s":
 		return 0
 	}
-	d, err := time.ParseDuration(raw)
+	d, err := time.ParseDuration(trimmed)
 	if err != nil {
 		slog.Warn("invalid SCHEDULE_INTERVAL, defaulting to off (resident-idle)",
 			"value", raw, "error", err)
@@ -68,6 +69,9 @@ func parseScheduleInterval(raw string) time.Duration {
 }
 
 // LogConfig logs the active configuration at startup.
+// It deliberately omits TautulliAPIKey and PlexToken: per the project's hard
+// "API tokens never logged" contract, no secret may be added to this (or any)
+// log call. Do not add cfg.TautulliAPIKey or cfg.PlexToken here.
 func LogConfig(cfg *Config) {
 	mode := "resident-idle"
 	if cfg.ScheduleInterval > 0 {
@@ -99,8 +103,8 @@ func getEnv(key, fallback string) string {
 	return fallback
 }
 
-// GetEnvBool parses a boolean env var with tolerant semantics.
-func GetEnvBool(key string, defaultVal bool) bool {
+// getEnvBool parses a boolean env var with tolerant semantics.
+func getEnvBool(key string, defaultVal bool) bool {
 	v := os.Getenv(key)
 	if v == "" {
 		return defaultVal
@@ -115,8 +119,4 @@ func GetEnvBool(key string, defaultVal bool) bool {
 			"key", key, "value", v, "default", defaultVal)
 		return defaultVal
 	}
-}
-
-func requireEnv(key string) string {
-	return os.Getenv(key)
 }

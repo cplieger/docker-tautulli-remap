@@ -27,12 +27,17 @@ var (
 )
 
 func main() {
+	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo})))
+
 	if len(os.Args) > 1 {
 		switch os.Args[1] {
 		case "health":
 			health.RunProbe(health.DefaultPath)
 		case "trigger":
 			runTrigger()
+		default:
+			slog.Error("unknown subcommand", "arg", os.Args[1], "valid", "health, trigger")
+			os.Exit(2)
 		}
 	}
 
@@ -50,16 +55,7 @@ func main() {
 	marker.Set(false)
 	defer marker.Cleanup()
 
-	httpClient := &http.Client{
-		Timeout: 2 * time.Minute,
-		CheckRedirect: func(_ *http.Request, _ []*http.Request) error {
-			return http.ErrUseLastResponse
-		},
-	}
-
-	plexClient := plex.New(cfg.PlexURL, cfg.PlexToken, httpClient)
-	tautulliClient := tautulli.New(cfg.TautulliURL, cfg.TautulliAPIKey, httpClient)
-	orch := orchestrator.New(plexClient, tautulliClient, cfg)
+	orch := buildOrchestrator(cfg)
 
 	if cfg.ScheduleInterval > 0 {
 		orch.RunScheduler(ctx, marker.Set)
@@ -99,22 +95,52 @@ func doTrigger() int {
 	// outcome — deleting it would mark the resident container unhealthy.
 	marker := health.NewMarker(health.DefaultPath)
 
+	orch := buildOrchestrator(cfg)
+
+	ok := orch.Run(ctx)
+	return finishTrigger(ctx, ok, marker.Set)
+}
+
+// finishTrigger records a completed trigger run's outcome and returns the
+// process exit code. It checks ctx.Err() FIRST: a graceful shutdown (parent
+// context cancelled, e.g. SIGTERM landing mid-run) is not a failure, so it logs
+// an Info and returns 0 without touching the health marker — mirroring
+// RunScheduler.doRun, which does not count a shutdown-interrupted run toward its
+// failure threshold. Checking the context before Run's bool also makes the exit
+// code deterministic: a signal arriving during the first UpdateMetadata can
+// otherwise make Run return either true or false depending on timing. Only when
+// the context is still live does Run's bool decide the result — success marks
+// the resident process healthy and returns 0; failure leaves the marker
+// untouched (this trigger runs as a separate `docker exec` against the resident
+// process's marker, so flipping it here would misreport the resident container)
+// and signals failure via exit code 1.
+func finishTrigger(ctx context.Context, ok bool, setHealthy func(bool)) int {
+	if ctx.Err() != nil {
+		slog.Info("trigger interrupted by shutdown", "cause", context.Cause(ctx))
+		return 0
+	}
+	if ok {
+		setHealthy(true)
+	} else {
+		slog.Warn("trigger run failed; health marker left unchanged, failure signalled via exit code")
+	}
+	slog.Info("shutting down", "mode", "trigger", "success", ok)
+	if !ok {
+		return 1
+	}
+	return 0
+}
+
+// buildOrchestrator constructs the shared HTTP client and the Plex,
+// Tautulli, and Orchestrator instances from cfg.
+func buildOrchestrator(cfg *appconfig.Config) *orchestrator.Orchestrator {
 	httpClient := &http.Client{
 		Timeout: 2 * time.Minute,
 		CheckRedirect: func(_ *http.Request, _ []*http.Request) error {
 			return http.ErrUseLastResponse
 		},
 	}
-
 	plexClient := plex.New(cfg.PlexURL, cfg.PlexToken, httpClient)
 	tautulliClient := tautulli.New(cfg.TautulliURL, cfg.TautulliAPIKey, httpClient)
-	orch := orchestrator.New(plexClient, tautulliClient, cfg)
-
-	ok := orch.Run(ctx)
-	marker.Set(ok)
-	slog.Info("shutting down", "mode", "trigger", "success", ok)
-	if !ok {
-		return 1
-	}
-	return 0
+	return orchestrator.New(plexClient, tautulliClient, cfg)
 }

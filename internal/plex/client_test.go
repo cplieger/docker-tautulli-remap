@@ -1,13 +1,10 @@
 package plex
 
 import (
-	"bytes"
 	"context"
 	"fmt"
-	"log/slog"
 	"net/http"
 	"net/http/httptest"
-	"strings"
 	"testing"
 	"time"
 )
@@ -25,7 +22,11 @@ func TestItemExists_Valid(t *testing.T) {
 	defer srv.Close()
 
 	c := New(srv.URL, "tok", srv.Client())
-	if !c.ItemExists(context.Background(), "123") {
+	exists, err := c.ItemExists(context.Background(), "123")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !exists {
 		t.Error("expected true for 200")
 	}
 }
@@ -37,7 +38,11 @@ func TestItemExists_NotFound(t *testing.T) {
 	defer srv.Close()
 
 	c := New(srv.URL, "tok", srv.Client())
-	if c.ItemExists(context.Background(), "999") {
+	exists, err := c.ItemExists(context.Background(), "999")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if exists {
 		t.Error("expected false for 404")
 	}
 }
@@ -46,12 +51,20 @@ func TestItemExists_RejectsNonNumericKeys(t *testing.T) {
 	c := New("http://localhost:32400", "token", &http.Client{Timeout: 1 * time.Second})
 	tests := []string{"../../../etc/passwd", "abc", "123/../../secret", "", "12 34"}
 	for _, key := range tests {
-		if c.ItemExists(context.Background(), key) {
+		exists, err := c.ItemExists(context.Background(), key)
+		if exists {
 			t.Errorf("ItemExists should return false for non-numeric key %q", key)
+		}
+		if err != nil {
+			t.Errorf("non-numeric key %q is not-exists, not a Plex error; got err = %v", key, err)
 		}
 	}
 }
 
+// TestItemExists_UnexpectedStatus pins FIX 6's fail-closed contract: a status
+// that is neither 200 nor 404 yields (false, non-nil error) so the caller does
+// not silently treat an unverifiable item as not-exists. 502/503 are retried
+// (transient) and 500/401 surface immediately, but all return an error.
 func TestItemExists_UnexpectedStatus(t *testing.T) {
 	statuses := []int{
 		http.StatusInternalServerError,
@@ -66,8 +79,12 @@ func TestItemExists_UnexpectedStatus(t *testing.T) {
 			}))
 			defer srv.Close()
 			c := New(srv.URL, "tok", srv.Client())
-			if c.ItemExists(context.Background(), "42") {
+			exists, err := c.ItemExists(context.Background(), "42")
+			if exists {
 				t.Errorf("expected false for status %d", status)
+			}
+			if err == nil {
+				t.Errorf("expected non-nil error for status %d (fail-closed: undetermined existence must not read as not-exists)", status)
 			}
 		})
 	}
@@ -75,51 +92,12 @@ func TestItemExists_UnexpectedStatus(t *testing.T) {
 
 func TestItemExists_InvalidURL(t *testing.T) {
 	c := New("://invalid-url", "token", &http.Client{})
-	if c.ItemExists(context.Background(), "42") {
+	exists, err := c.ItemExists(context.Background(), "42")
+	if exists {
 		t.Error("expected false for invalid URL")
 	}
-}
-
-// TestItemExists_WarnsOnlyOnUnexpectedStatus pins the warning side-effect of
-// the status-code guard: ItemExists logs "plex check unexpected status" only
-// for statuses other than 200 or 404. The return-value tests above don't
-// observe that warning, so this asserts it fires for an unexpected 500 and
-// stays silent for the two expected statuses (200 and 404).
-func TestItemExists_WarnsOnlyOnUnexpectedStatus(t *testing.T) {
-	tests := []struct {
-		name     string
-		status   int
-		wantOK   bool
-		wantWarn bool
-	}{
-		{"ok 200 does not warn", http.StatusOK, true, false},
-		{"not found 404 does not warn", http.StatusNotFound, false, false},
-		{"server error 500 warns", http.StatusInternalServerError, false, true},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-				w.WriteHeader(tt.status)
-			}))
-			defer srv.Close()
-
-			var buf bytes.Buffer
-			prev := slog.Default()
-			slog.SetDefault(slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug})))
-			t.Cleanup(func() { slog.SetDefault(prev) })
-
-			c := New(srv.URL, "tok", srv.Client())
-			gotOK := c.ItemExists(context.Background(), "42")
-
-			if gotOK != tt.wantOK {
-				t.Errorf("ItemExists(status %d) = %v, want %v", tt.status, gotOK, tt.wantOK)
-			}
-			gotWarn := strings.Contains(buf.String(), "plex check unexpected status")
-			if gotWarn != tt.wantWarn {
-				t.Errorf("status %d: unexpected-status warning logged = %v, want %v; log=%q",
-					tt.status, gotWarn, tt.wantWarn, buf.String())
-			}
-		})
+	if err == nil {
+		t.Error("expected non-nil error for invalid URL")
 	}
 }
 
@@ -130,7 +108,10 @@ func TestLibrarySections(t *testing.T) {
 	defer srv.Close()
 
 	c := New(srv.URL, "tok", srv.Client())
-	sections := c.LibrarySections(context.Background())
+	sections, err := c.LibrarySections(context.Background())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
 	if len(sections) != 2 {
 		t.Fatalf("expected 2 sections, got %d", len(sections))
 	}
@@ -150,7 +131,10 @@ func TestLibrarySections_ThreeSections(t *testing.T) {
 	defer srv.Close()
 
 	c := New(srv.URL, "tok", srv.Client())
-	sections := c.LibrarySections(context.Background())
+	sections, err := c.LibrarySections(context.Background())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
 	if len(sections) != 3 {
 		t.Fatalf("expected 3 sections, got %d", len(sections))
 	}
@@ -166,7 +150,11 @@ func TestLibrarySections_Error(t *testing.T) {
 	defer srv.Close()
 
 	c := New(srv.URL, "tok", srv.Client())
-	if sections := c.LibrarySections(context.Background()); sections != nil {
+	sections, err := c.LibrarySections(context.Background())
+	if err == nil {
+		t.Error("expected error on non-200, got nil")
+	}
+	if sections != nil {
 		t.Errorf("expected nil on error, got %v", sections)
 	}
 }
@@ -178,7 +166,11 @@ func TestLibrarySections_InvalidJSON(t *testing.T) {
 	defer srv.Close()
 
 	c := New(srv.URL, "tok", srv.Client())
-	if sections := c.LibrarySections(context.Background()); sections != nil {
+	sections, err := c.LibrarySections(context.Background())
+	if err == nil {
+		t.Error("expected error on invalid JSON, got nil")
+	}
+	if sections != nil {
 		t.Errorf("expected nil on invalid JSON, got %v", sections)
 	}
 }
@@ -192,14 +184,22 @@ func TestLibrarySections_ReadError(t *testing.T) {
 	defer srv.Close()
 
 	c := New(srv.URL, "tok", srv.Client())
-	if sections := c.LibrarySections(context.Background()); sections != nil {
+	sections, err := c.LibrarySections(context.Background())
+	if err == nil {
+		t.Error("expected error on truncated body, got nil")
+	}
+	if sections != nil {
 		t.Errorf("expected nil on truncated body, got %v", sections)
 	}
 }
 
 func TestLibrarySections_InvalidURL(t *testing.T) {
 	c := New("://invalid-url", "token", &http.Client{})
-	if sections := c.LibrarySections(context.Background()); sections != nil {
+	sections, err := c.LibrarySections(context.Background())
+	if err == nil {
+		t.Error("expected error for invalid URL, got nil")
+	}
+	if sections != nil {
 		t.Errorf("expected nil for invalid URL, got %v", sections)
 	}
 }
@@ -211,7 +211,10 @@ func TestLibraryAll(t *testing.T) {
 	defer srv.Close()
 
 	c := New(srv.URL, "tok", srv.Client())
-	items := c.LibraryAll(context.Background(), "1")
+	items, err := c.LibraryAll(context.Background(), "1")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
 	if len(items) != 1 {
 		t.Fatalf("expected 1 item, got %d", len(items))
 	}
@@ -236,7 +239,10 @@ func TestLibraryAll_WithGUIDs(t *testing.T) {
 	defer srv.Close()
 
 	c := New(srv.URL, "tok", srv.Client())
-	items := c.LibraryAll(context.Background(), "1")
+	items, err := c.LibraryAll(context.Background(), "1")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
 	if len(items) != 1 {
 		t.Fatalf("expected 1 item, got %d", len(items))
 	}
@@ -252,7 +258,11 @@ func TestLibraryAll_NonNumericSectionKey(t *testing.T) {
 	defer srv.Close()
 
 	c := New(srv.URL, "tok", srv.Client())
-	if items := c.LibraryAll(context.Background(), "abc"); items != nil {
+	items, err := c.LibraryAll(context.Background(), "abc")
+	if err == nil {
+		t.Error("expected error for non-numeric key, got nil")
+	}
+	if items != nil {
 		t.Errorf("expected nil for non-numeric key, got %v", items)
 	}
 }
@@ -267,7 +277,10 @@ func TestLibraryAll_SkipsInvalidRatingKey(t *testing.T) {
 	defer srv.Close()
 
 	c := New(srv.URL, "tok", srv.Client())
-	items := c.LibraryAll(context.Background(), "1")
+	items, err := c.LibraryAll(context.Background(), "1")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
 	if len(items) != 1 {
 		t.Fatalf("expected 1 item (bad key skipped), got %d", len(items))
 	}
@@ -283,7 +296,11 @@ func TestLibraryAll_HTTPError(t *testing.T) {
 	defer srv.Close()
 
 	c := New(srv.URL, "tok", srv.Client())
-	if items := c.LibraryAll(context.Background(), "1"); items != nil {
+	items, err := c.LibraryAll(context.Background(), "1")
+	if err == nil {
+		t.Error("expected error on HTTP error, got nil")
+	}
+	if items != nil {
 		t.Errorf("expected nil on HTTP error, got %v", items)
 	}
 }
@@ -295,7 +312,11 @@ func TestLibraryAll_InvalidJSON(t *testing.T) {
 	defer srv.Close()
 
 	c := New(srv.URL, "tok", srv.Client())
-	if items := c.LibraryAll(context.Background(), "1"); items != nil {
+	items, err := c.LibraryAll(context.Background(), "1")
+	if err == nil {
+		t.Error("expected error on invalid JSON, got nil")
+	}
+	if items != nil {
 		t.Errorf("expected nil on invalid JSON, got %v", items)
 	}
 }
@@ -307,7 +328,10 @@ func TestLibraryAll_EmptyMetadata(t *testing.T) {
 	defer srv.Close()
 
 	c := New(srv.URL, "tok", srv.Client())
-	items := c.LibraryAll(context.Background(), "1")
+	items, err := c.LibraryAll(context.Background(), "1")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
 	if len(items) != 0 {
 		t.Errorf("expected 0 items, got %d", len(items))
 	}
@@ -323,7 +347,10 @@ func TestLibraryAll_UnsupportedGUID(t *testing.T) {
 	defer srv.Close()
 
 	c := New(srv.URL, "tok", srv.Client())
-	items := c.LibraryAll(context.Background(), "1")
+	items, err := c.LibraryAll(context.Background(), "1")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
 	if len(items) != 1 {
 		t.Fatalf("expected 1 item, got %d", len(items))
 	}
@@ -341,14 +368,22 @@ func TestLibraryAll_ReadError(t *testing.T) {
 	defer srv.Close()
 
 	c := New(srv.URL, "tok", srv.Client())
-	if items := c.LibraryAll(context.Background(), "1"); items != nil {
+	items, err := c.LibraryAll(context.Background(), "1")
+	if err == nil {
+		t.Error("expected error on truncated body, got nil")
+	}
+	if items != nil {
 		t.Errorf("expected nil on truncated body, got %v", items)
 	}
 }
 
 func TestLibraryAll_InvalidURL(t *testing.T) {
 	c := New("://invalid-url", "token", &http.Client{})
-	if items := c.LibraryAll(context.Background(), "1"); items != nil {
+	items, err := c.LibraryAll(context.Background(), "1")
+	if err == nil {
+		t.Error("expected error for invalid URL, got nil")
+	}
+	if items != nil {
 		t.Errorf("expected nil for invalid URL, got %v", items)
 	}
 }
@@ -362,8 +397,12 @@ func TestItemExists_CancelledContext(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	c := New(srv.URL, "tok", srv.Client())
-	if c.ItemExists(ctx, "42") {
+	exists, err := c.ItemExists(ctx, "42")
+	if exists {
 		t.Error("expected false for cancelled context")
+	}
+	if err == nil {
+		t.Error("expected non-nil error for cancelled context")
 	}
 }
 
@@ -376,7 +415,104 @@ func TestLibrarySections_CancelledContext(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	c := New(srv.URL, "tok", srv.Client())
-	if sections := c.LibrarySections(ctx); sections != nil {
+	sections, err := c.LibrarySections(ctx)
+	if err == nil {
+		t.Error("expected error for cancelled context, got nil")
+	}
+	if sections != nil {
 		t.Errorf("expected nil for cancelled context, got %v", sections)
+	}
+}
+
+func TestLibraryAll_CancelledContext(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Write([]byte(`{"MediaContainer":{"Metadata":[]}}`))
+	}))
+	defer srv.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	c := New(srv.URL, "tok", srv.Client())
+	items, err := c.LibraryAll(ctx, "1")
+	if err == nil {
+		t.Error("expected error for cancelled context, got nil")
+	}
+	if items != nil {
+		t.Errorf("expected nil for cancelled context, got %v", items)
+	}
+}
+
+func TestItemExists_RetriesTransientThenSucceeds(t *testing.T) {
+	calls := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		calls++
+		if calls == 1 {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	c := New(srv.URL, "tok", srv.Client())
+	exists, err := c.ItemExists(context.Background(), "42")
+	if err != nil {
+		t.Fatalf("unexpected error after a transient 503 was retried: %v", err)
+	}
+	if !exists {
+		t.Error("expected true: a 503 retried to a 200 must report the item exists")
+	}
+	if calls != 2 {
+		t.Errorf("calls = %d, want 2 (one 503 then one 200, confirming ItemExists actually retried the transient failure)", calls)
+	}
+}
+
+func TestLibrarySections_RetriesTransientThenSucceeds(t *testing.T) {
+	calls := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		calls++
+		if calls == 1 {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			return
+		}
+		w.Write([]byte(`{"MediaContainer":{"Directory":[{"key":"1","title":"Movies","type":"movie"}]}}`))
+	}))
+	defer srv.Close()
+
+	c := New(srv.URL, "tok", srv.Client())
+	sections, err := c.LibrarySections(context.Background())
+	if err != nil {
+		t.Fatalf("unexpected error after a transient 503 was retried: %v", err)
+	}
+	if len(sections) != 1 {
+		t.Fatalf("expected 1 section after retry, got %d", len(sections))
+	}
+	if calls != 2 {
+		t.Errorf("calls = %d, want 2 (one 503 then one 200, confirming LibrarySections retried the transient failure)", calls)
+	}
+}
+
+func TestLibraryAll_RetriesTransientThenSucceeds(t *testing.T) {
+	calls := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		calls++
+		if calls == 1 {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			return
+		}
+		w.Write([]byte(`{"MediaContainer":{"Metadata":[{"title":"Test Movie","ratingKey":"42","year":2020}]}}`))
+	}))
+	defer srv.Close()
+
+	c := New(srv.URL, "tok", srv.Client())
+	items, err := c.LibraryAll(context.Background(), "1")
+	if err != nil {
+		t.Fatalf("unexpected error after a transient 503 was retried: %v", err)
+	}
+	if len(items) != 1 {
+		t.Fatalf("expected 1 item after retry, got %d", len(items))
+	}
+	if calls != 2 {
+		t.Errorf("calls = %d, want 2 (one 503 then one 200, confirming LibraryAll retried the transient failure)", calls)
 	}
 }

@@ -1,3 +1,7 @@
+# Minimal tautulli-remap example. The image runs rootless (distroless nonroot)
+# and ships its own Docker HEALTHCHECK. See the README for the full configuration
+# reference and the hardened deployment profile (read_only: true, cap_drop: [ALL],
+# no-new-privileges:true, and a 16 MB tmpfs for /tmp).
 services:
   tautulli-remap:
     image: ghcr.io/cplieger/tautulli-remap:latest
@@ -8,9 +12,9 @@ services:
     environment:
       TZ: "Europe/Paris"
       TAUTULLI_URL: "http://tautulli:8181"
-      TAUTULLI_APIKEY: "your-tautulli-apikey"
+      TAUTULLI_APIKEY: "your-tautulli-apikey"  # required
       PLEX_URL: "http://plex:32400"
-      PLEX_TOKEN: "your-plex-token"
+      PLEX_TOKEN: "your-plex-token"  # required
       SCHEDULE_INTERVAL: "24h"  # Go duration; "off" = resident-idle
       FALLBACK_TITLE_YEAR: "true"
       FALLBACK_TITLE_ONLY: "false"  # risk of false matches

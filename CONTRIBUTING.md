@@ -24,7 +24,7 @@ anything else. All real logic lives under `internal/`:
 
 - `internal/config` — environment parsing into a `Config` struct. Required
   vars (`TAUTULLI_APIKEY`, `PLEX_TOKEN`) return a `MissingEnvError`; booleans
-  go through `GetEnvBool` (tolerant of `true/1/yes/on`).
+  go through `getEnvBool` (tolerant of `true/1/yes/on`).
 - `internal/orchestrator` — coordinates the six-step run: collect Tautulli
   history, find stale keys, build the Plex index, match, apply remappings,
   clear recently-added. Owns the scheduler loop and the circuit breaker.
@@ -32,8 +32,10 @@ anything else. All real logic lives under `internal/`:
   normalization, the three-strategy match chain, the Plex index builder, and
   all the `MediaType` / `MatchMethod` / `RatingKey` types live here.
 - `internal/plex`, `internal/tautulli` — HTTP API clients for each upstream.
-- `internal/httputil` — small shared HTTP helpers (error sanitization,
-  context-aware sleep).
+  Both wrap their reads in `cplieger/httpx` for bounded retry on transient
+  failures (Plex reads use `httpx.RetryWithBackoff`; Tautulli reads use
+  `httpx.Retry`, honoring `Retry-After`); mutating Tautulli commands call the
+  bare client directly and are never retried.
 
 ## Architecture notes that are easy to miss
 
@@ -53,8 +55,9 @@ var (
 When you add a method the orchestrator needs, add it to the consumer interface
 and the assertions catch a missing implementation at build time.
 
-**The match chain is ordered by increasing aggressiveness.** `remap.MatchOne`
-tries GUID, then title+year (gated by `FallbackTitleYear`), then title-only
+**The match chain is ordered by increasing aggressiveness.** The per-item
+matcher `matchOne` (driven by the exported `MatchStaleItems`) tries GUID,
+then title+year (gated by `FallbackTitleYear`), then title-only
 (gated by `FallbackTitleOnly`, and guarded to the same media type). Every
 strategy refuses to return the old key. Keep this ordering and the
 old-key guard when extending it — they are the safety net against false
@@ -62,8 +65,8 @@ matches.
 
 **Dry-run is the default and must stay safe.** `DRY_RUN` defaults to `true`.
 In dry-run the orchestrator skips the backup, logs each would-be remap at
-debug level, and never calls `UpdateMetadata`. Any new write path must respect
-`cfg.DryRun` the same way.
+info level (visible at the default verbosity), and never calls
+`UpdateMetadata`. Any new write path must respect `cfg.DryRun` the same way.
 
 **Re-runs must be idempotent.** The scheduler can fire the same run
 repeatedly; remapping only stale keys and skipping the recently-added clear
@@ -93,10 +96,11 @@ enough to catch formatting drift; `golangci-lint fmt` fixes it.
 
 ## Conventions and gotchas
 
-- **Stdlib-only.** Production code depends on the standard library plus two
-  first-party shared libs (`cplieger/health`, `golang.org/x/sync`). Don't add
-  third-party runtime dependencies without discussing it first — zero external
-  deps is a deliberate supply-chain choice.
+- **Stdlib-first.** Production code depends on the standard library plus two
+  first-party shared libs (`cplieger/health`, `cplieger/httpx`) and
+  `golang.org/x/sync` (errgroup). Don't add third-party runtime dependencies
+  without discussing it first — a minimal, first-party-leaning dependency set is
+  a deliberate supply-chain choice.
 - **Structured logging is key-value only.** `sloglint` runs with `kv-only`,
   so every `slog` call must use `slog.Info("msg", "key", val)` form — no
   attribute helpers. Match the existing log shape.

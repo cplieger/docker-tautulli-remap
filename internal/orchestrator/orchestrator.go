@@ -21,22 +21,26 @@ import (
 const (
 	maxTautulliRecords     = 500_000
 	maxConsecutiveFailures = 10
-	staleCheckParallelism  = 8
+	plexParallelism        = 8
 )
 
-// CircuitBreaker tracks consecutive failures and trips when the threshold is reached.
-type CircuitBreaker struct {
+// historyPageSize is the number of Tautulli history rows requested per page;
+// the pagination cursor advances by the same amount.
+const historyPageSize = 1000
+
+// circuitBreaker tracks consecutive failures and trips when the threshold is reached.
+type circuitBreaker struct {
 	threshold   int
 	consecutive int
 }
 
-// NewCircuitBreaker creates a breaker that trips after threshold consecutive failures.
-func NewCircuitBreaker(threshold int) *CircuitBreaker {
-	return &CircuitBreaker{threshold: threshold}
+// newCircuitBreaker creates a breaker that trips after threshold consecutive failures.
+func newCircuitBreaker(threshold int) *circuitBreaker {
+	return &circuitBreaker{threshold: threshold}
 }
 
-// Record records a success (ok=true) or failure (ok=false). Returns true if the breaker has tripped.
-func (cb *CircuitBreaker) Record(ok bool) bool {
+// record registers a success (ok=true) or failure (ok=false) and reports whether the breaker has tripped.
+func (cb *circuitBreaker) record(ok bool) bool {
 	if ok {
 		cb.consecutive = 0
 		return false
@@ -48,18 +52,23 @@ func (cb *CircuitBreaker) Record(ok bool) bool {
 // defaultPaginationDelay is the default pause between history pages.
 const defaultPaginationDelay = 500 * time.Millisecond
 
+// schedulerUnhealthyThreshold is the number of consecutive failed scheduled
+// runs RunScheduler tolerates before flipping the health marker unhealthy.
+// Damps transient Plex/Tautulli blips so a single failed run does not flap
+// the container.
+const schedulerUnhealthyThreshold = 3
+
 // PlexClient defines the interface for Plex API interactions, shaped by
 // what the orchestrator needs.
 type PlexClient interface {
-	ItemExists(ctx context.Context, ratingKey string) bool
-	LibrarySections(ctx context.Context) []remap.Section
-	LibraryAll(ctx context.Context, sectionKey string) []remap.LibItem
+	ItemExists(ctx context.Context, ratingKey string) (bool, error)
+	LibrarySections(ctx context.Context) ([]remap.Section, error)
+	LibraryAll(ctx context.Context, sectionKey string) ([]remap.LibItem, error)
 }
 
 // TautulliClient defines the interface for Tautulli API interactions, shaped
 // by what the orchestrator needs.
 type TautulliClient interface {
-	API(ctx context.Context, cmd string, params url.Values) ([]byte, error)
 	APIWithRetry(ctx context.Context, cmd string, params url.Values) ([]byte, error)
 	GetHistory(ctx context.Context, params url.Values) (*tautulli.HistoryPage, error)
 	UpdateMetadata(ctx context.Context, oldKey, newKey string, mediaType remap.MediaType) error
@@ -81,15 +90,32 @@ func New(p PlexClient, t TautulliClient, cfg *config.Config) *Orchestrator {
 	return &Orchestrator{plex: p, tautulli: t, cfg: cfg}
 }
 
-// Run executes the remap workflow. Returns true on success.
-func (o *Orchestrator) Run(ctx context.Context) bool {
+// createBackup makes a Tautulli backup before any mutation. In dry-run mode it
+// is skipped (and reports success). In live mode a failed backup returns false
+// so the caller aborts without mutating Tautulli, since there would be no
+// recovery point.
+func (o *Orchestrator) createBackup(ctx context.Context) bool {
 	if o.cfg.DryRun {
 		slog.Info("dry run enabled, skipping backup")
-	} else {
-		slog.Info("creating Tautulli backup")
-		if _, err := o.tautulli.APIWithRetry(ctx, "backup_db", nil); err != nil {
-			slog.Error("backup failed after retries", "error", err)
+		return true
+	}
+	slog.Info("creating Tautulli backup")
+	if _, err := o.tautulli.APIWithRetry(ctx, "backup_db", nil); err != nil {
+		if ctx.Err() != nil {
+			slog.Info("backup interrupted by shutdown; aborting run", "cause", context.Cause(ctx))
+		} else {
+			slog.Error("backup failed after retries; aborting run without mutating Tautulli (no recovery point)",
+				"error", err)
 		}
+		return false
+	}
+	return true
+}
+
+// Run executes the remap workflow. Returns true on success.
+func (o *Orchestrator) Run(ctx context.Context) bool {
+	if !o.createBackup(ctx) {
+		return false
 	}
 
 	// Step 1: Collect items from Tautulli history
@@ -108,7 +134,15 @@ func (o *Orchestrator) Run(ctx context.Context) bool {
 
 	// Step 2: Find stale keys
 	slog.Info("step 2: checking keys against Plex")
-	stale := o.FindStaleKeys(ctx, tautulliItems)
+	stale, err := o.FindStaleKeys(ctx, tautulliItems)
+	if err != nil {
+		if ctx.Err() != nil {
+			slog.Info("run cancelled during stale check", "cause", context.Cause(ctx))
+		} else {
+			slog.Error("aborting run: Plex returned errors during stale-key check", "error", err)
+		}
+		return false
+	}
 	slog.Info("step 2 done", "stale", len(stale), "total", len(tautulliItems))
 	if ctx.Err() != nil {
 		slog.Info("run cancelled during stale check", "cause", context.Cause(ctx))
@@ -117,26 +151,13 @@ func (o *Orchestrator) Run(ctx context.Context) bool {
 
 	if len(stale) == 0 {
 		slog.Info("all rating keys are valid, nothing to remap")
-		slog.Info("scan complete",
-			"total", len(tautulliItems),
-			"stale", 0,
-			"matched", 0,
-			"unmatched", 0,
-			"updated", 0,
-			"failed", 0,
-			"dry_run", o.cfg.DryRun)
+		logScanComplete(len(tautulliItems), 0, 0, 0, 0, 0, o.cfg.DryRun)
 		return true
 	}
 
 	// Step 3: Build Plex library index
-	slog.Info("step 3: building Plex library index")
-	byGUID, byTitleYear, byTitle := remap.BuildPlexIndex(ctx, o.plex, staleCheckParallelism)
-	if ctx.Err() != nil {
-		slog.Info("run cancelled during plex indexing", "cause", context.Cause(ctx))
-		return false
-	}
-	if len(byGUID) == 0 && len(byTitleYear) == 0 && len(byTitle) == 0 {
-		slog.Error("Plex library index is empty, cannot match stale items")
+	byGUID, byTitleYear, byTitle, ok := o.buildIndex(ctx)
+	if !ok {
 		return false
 	}
 
@@ -146,25 +167,67 @@ func (o *Orchestrator) Run(ctx context.Context) bool {
 		o.cfg.FallbackTitleYear, o.cfg.FallbackTitleOnly)
 
 	// Step 5: Apply remappings
-	updated, failed := o.ApplyRemappings(ctx, matched, unmatched)
+	updated, failed, aborted := o.ApplyRemappings(ctx, matched, unmatched)
 
-	// Step 6: Clear recently added
-	if updated > 0 {
+	// A shutdown during the apply phase must not report success: applyMatched
+	// breaks out of its loop on cancellation and returns aborted=false, so without
+	// this guard the terminal expression below reads failed==0 as a successful pass.
+	// Mirror the ctx re-checks after steps 1 and 2.
+	if ctx.Err() != nil {
+		slog.Info("run cancelled during remap phase", "cause", context.Cause(ctx))
+		return false
+	}
+
+	// Step 6: Clear recently added. Live mode clears only when an update landed
+	// (idempotency). Dry-run never increments updated, so preview the clear when
+	// matches exist, otherwise the dry-run output hides a mutation a live run performs.
+	switch {
+	case updated > 0:
 		o.ClearRecentlyAdded(ctx)
-	} else {
+	case o.cfg.DryRun && len(matched) > 0:
+		o.ClearRecentlyAdded(ctx)
+	default:
 		slog.Info("skipping clear recently added", "reason", "no_updates")
 	}
 
-	slog.Info("scan complete",
-		"total", len(tautulliItems),
-		"stale", len(stale),
-		"matched", len(matched),
-		"unmatched", len(unmatched),
-		"updated", updated,
-		"failed", failed,
-		"dry_run", o.cfg.DryRun)
+	logScanComplete(len(tautulliItems), len(stale), len(matched), len(unmatched), updated, failed, o.cfg.DryRun)
 
-	return failed == 0 || updated > 0
+	// Success when nothing failed, or when at least one update landed: a
+	// partial remap still made progress and must not flap the health marker.
+	// A tripped circuit breaker (aborted) always fails the run, even if some
+	// updates landed before it opened, because the remap phase did not run to
+	// completion.
+	return !aborted && (failed == 0 || updated > 0)
+}
+
+// buildIndex builds the Plex library index used for matching. It returns
+// ok=false (after logging the reason) when the run must abort before matching:
+// context cancellation, any failed library section, or a completely empty index.
+func (o *Orchestrator) buildIndex(ctx context.Context) (byGUID, byTitleYear, byTitle map[string]remap.PlexEntry, ok bool) {
+	slog.Info("step 3: building Plex library index")
+	byGUID, byTitleYear, byTitle, failedSections := remap.BuildPlexIndex(ctx, o.plex, plexParallelism)
+	if ctx.Err() != nil {
+		slog.Info("run cancelled during plex indexing", "cause", context.Cause(ctx))
+		return nil, nil, nil, false
+	}
+	// Abort on any failed section before the all-empty check. A partial outage
+	// yields a non-empty but incomplete index (a stale item whose correct entry
+	// lived in a failed section could false-match a same-title+year twin in a
+	// section that loaded); a total outage yields an empty index that the
+	// all-empty guard would otherwise misreport as "library is empty". Checking
+	// failedSections first makes the documented "Plex errors -> unhealthy"
+	// diagnostic fire for both cases (the scheduler counts this toward the
+	// consecutive-failure threshold).
+	if failedSections > 0 {
+		slog.Error("aborting run: Plex returned errors for some library sections",
+			"failed_sections", failedSections)
+		return nil, nil, nil, false
+	}
+	if len(byGUID) == 0 && len(byTitleYear) == 0 && len(byTitle) == 0 {
+		slog.Error("Plex library index is empty, cannot match stale items")
+		return nil, nil, nil, false
+	}
+	return byGUID, byTitleYear, byTitle, true
 }
 
 // RunScheduler implements the long-running scheduled mode. The setHealthy
@@ -180,6 +243,14 @@ func (o *Orchestrator) RunScheduler(ctx context.Context, setHealthy func(bool)) 
 	failures := 0
 	doRun := func() {
 		ok := o.Run(ctx)
+		if ctx.Err() != nil {
+			// Shutdown interrupted the run; not a real failure, so don't count it
+			// toward the damping threshold, flip the marker, or log a misleading
+			// "run complete"/next_run_at (deferred Cleanup removes the marker on
+			// exit). A partial run that landed updates before the signal is not a
+			// scheduled completion.
+			return
+		}
 		if ok {
 			failures = 0
 			setHealthy(true)
@@ -191,7 +262,7 @@ func (o *Orchestrator) RunScheduler(ctx context.Context, setHealthy func(bool)) 
 		slog.Warn("run failed",
 			"consecutive_failures", failures,
 			"retry_in", interval)
-		if failures >= 3 {
+		if failures >= schedulerUnhealthyThreshold {
 			setHealthy(false)
 		}
 	}
@@ -220,19 +291,8 @@ func (o *Orchestrator) CollectTautulliItems(ctx context.Context) (items map[stri
 	processed := 0
 
 	for {
-		params := url.Values{
-			"grouping":         {"0"},
-			"include_activity": {"0"},
-			"media_type":       {"movie,episode"},
-			"order_column":     {"date"},
-			"order_dir":        {"desc"},
-			"start":            {strconv.Itoa(start)},
-			"length":           {"1000"},
-		}
-
-		page, err := o.tautulli.GetHistory(ctx, params)
-		if err != nil {
-			slog.Error("failed to get history", "error", err)
+		page, ok := o.fetchHistoryPage(ctx, start)
+		if !ok {
 			return nil, 0
 		}
 
@@ -253,7 +313,7 @@ func (o *Orchestrator) CollectTautulliItems(ctx context.Context) (items map[stri
 		guidDropped += addHistoryPage(page, items)
 		processed += len(page.Rows)
 
-		start += 1000
+		start += historyPageSize
 		if start >= total {
 			break
 		}
@@ -264,6 +324,31 @@ func (o *Orchestrator) CollectTautulliItems(ctx context.Context) (items map[stri
 	}
 
 	return items, guidDropped
+}
+
+// fetchHistoryPage requests one page of Tautulli history starting at start. On
+// error it logs (distinguishing shutdown from a real failure) and returns
+// ok=false so the caller stops paginating.
+func (o *Orchestrator) fetchHistoryPage(ctx context.Context, start int) (*tautulli.HistoryPage, bool) {
+	params := url.Values{
+		"grouping":         {"0"},
+		"include_activity": {"0"},
+		"media_type":       {"movie,episode"},
+		"order_column":     {"date"},
+		"order_dir":        {"desc"},
+		"start":            {strconv.Itoa(start)},
+		"length":           {strconv.Itoa(historyPageSize)},
+	}
+	page, err := o.tautulli.GetHistory(ctx, params)
+	if err != nil {
+		if ctx.Err() != nil {
+			slog.Info("history collection interrupted by shutdown", "cause", context.Cause(ctx))
+		} else {
+			slog.Error("failed to get history", "error", err)
+		}
+		return nil, false
+	}
+	return page, true
 }
 
 // addHistoryPage processes one page of Tautulli history rows into items,
@@ -279,19 +364,28 @@ func addHistoryPage(page *tautulli.HistoryPage, items map[string]remap.TautulliE
 
 // FindStaleKeys checks each item in the Tautulli history map against the Plex
 // API and returns only the entries whose rating keys no longer exist in Plex.
-func (o *Orchestrator) FindStaleKeys(ctx context.Context, items map[string]remap.TautulliEntry) map[string]remap.TautulliEntry {
+// A non-nil error means at least one Plex check failed in a way that could not
+// be resolved (a real outage rather than a 404): the first such error cancels
+// the remaining checks and is returned so the caller aborts the run instead of
+// treating undetermined items as stale. The (possibly partial) stale map is
+// returned alongside the error for diagnostics but must not be trusted.
+func (o *Orchestrator) FindStaleKeys(ctx context.Context, items map[string]remap.TautulliEntry) (map[string]remap.TautulliEntry, error) {
 	var mu sync.Mutex
 	stale := map[string]remap.TautulliEntry{}
 
 	g, gctx := errgroup.WithContext(ctx)
-	g.SetLimit(staleCheckParallelism)
+	g.SetLimit(plexParallelism)
 
 	for key, item := range items {
 		g.Go(func() error {
 			if gctx.Err() != nil {
 				return nil
 			}
-			if !o.plex.ItemExists(gctx, key) {
+			exists, err := o.plex.ItemExists(gctx, key)
+			if err != nil {
+				return err
+			}
+			if !exists {
 				mu.Lock()
 				stale[key] = item
 				mu.Unlock()
@@ -300,26 +394,29 @@ func (o *Orchestrator) FindStaleKeys(ctx context.Context, items map[string]remap
 		})
 	}
 
-	_ = g.Wait()
+	if err := g.Wait(); err != nil {
+		return stale, err
+	}
 
 	slog.Info("stale key check complete", "checked", len(items), "stale", len(stale))
-	return stale
+	return stale, nil
 }
 
 // ApplyRemappings updates Tautulli metadata for each matched item and logs
-// all unmatched items. It returns the count of successfully updated records
-// and the count of failures. In dry-run mode it logs what would change
-// without writing to Tautulli.
+// all unmatched items. It returns the count of successfully updated records,
+// the count of failures, and whether the run was aborted by the consecutive-
+// failure circuit breaker. In dry-run mode it logs what would change without
+// writing to Tautulli.
 func (o *Orchestrator) ApplyRemappings(
 	ctx context.Context,
 	matched []remap.MatchResult,
 	unmatched []remap.UnmatchResult,
-) (updated, failed int) {
+) (updated, failed int, aborted bool) {
 	logUnmatched(unmatched)
 
 	if len(matched) == 0 {
 		slog.Info("no matches found for stale items")
-		return 0, 0
+		return 0, 0, false
 	}
 
 	if o.cfg.DryRun {
@@ -343,18 +440,28 @@ func logUnmatched(unmatched []remap.UnmatchResult) {
 	}
 }
 
+// logScanComplete emits the end-of-run summary line. Both the nothing-to-remap
+// early return and the full-run path log through it so the field set stays in a
+// single place.
+func logScanComplete(total, stale, matched, unmatched, updated, failed int, dryRun bool) {
+	slog.Info("scan complete",
+		"total", total,
+		"stale", stale,
+		"matched", matched,
+		"unmatched", unmatched,
+		"updated", updated,
+		"failed", failed,
+		"dry_run", dryRun)
+}
+
 // applyMatched updates Tautulli metadata for each matched item, honoring
 // dry-run mode, context cancellation, and the consecutive-failure circuit
-// breaker. It returns the counts of updated and failed records.
-func (o *Orchestrator) applyMatched(ctx context.Context, matched []remap.MatchResult) (updated, failed int) {
-	perItemLevel := slog.LevelInfo
-	if o.cfg.DryRun {
-		perItemLevel = slog.LevelDebug
-	}
-
-	breaker := NewCircuitBreaker(maxConsecutiveFailures)
+// breaker. It returns the counts of updated and failed records, and whether
+// the breaker tripped (aborted), which fails the run regardless of progress.
+func (o *Orchestrator) applyMatched(ctx context.Context, matched []remap.MatchResult) (updated, failed int, aborted bool) {
+	breaker := newCircuitBreaker(maxConsecutiveFailures)
 	for i, m := range matched {
-		slog.Log(ctx, perItemLevel, "remap",
+		slog.Info("remap",
 			"title", m.Title, "year", m.Year, "type", m.MediaType,
 			"old_key", m.OldKey, "new_key", m.NewKey,
 			"method", m.Method, "dry_run", o.cfg.DryRun)
@@ -366,22 +473,26 @@ func (o *Orchestrator) applyMatched(ctx context.Context, matched []remap.MatchRe
 			break
 		}
 		if err := o.tautulli.UpdateMetadata(ctx, m.OldKey, m.NewKey, m.MediaType); err != nil {
+			if ctx.Err() != nil {
+				slog.Warn("remapping interrupted", "remaining", len(matched)-i)
+				break
+			}
 			slog.Error("remap failed",
 				"title", m.Title, "old_key", m.OldKey, "error", err)
 			failed++
-			if breaker.Record(false) {
+			if breaker.record(false) {
 				slog.Error("aborting remap phase",
 					"reason", "too_many_consecutive_failures",
 					"consecutive", breaker.consecutive,
 					"remaining", len(matched)-i-1)
-				return updated, failed
+				return updated, failed, true
 			}
 			continue
 		}
 		updated++
-		breaker.Record(true)
+		breaker.record(true)
 	}
-	return updated, failed
+	return updated, failed, false
 }
 
 // ClearRecentlyAdded removes all entries from Tautulli's recently-added table
@@ -394,7 +505,11 @@ func (o *Orchestrator) ClearRecentlyAdded(ctx context.Context) {
 	}
 	slog.Info("clearing recently added items")
 	if err := o.tautulli.DeleteRecentlyAdded(ctx); err != nil {
-		slog.Error("failed to clear recently added", "error", err)
+		if ctx.Err() != nil {
+			slog.Info("clear recently added interrupted by shutdown", "cause", context.Cause(ctx))
+		} else {
+			slog.Error("failed to clear recently added", "error", err)
+		}
 	}
 }
 
