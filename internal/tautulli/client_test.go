@@ -10,6 +10,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/cplieger/tautulli-remap/internal/remap"
 )
 
 // newTestClient creates a Client with fast retry for tests.
@@ -110,7 +112,7 @@ func TestAPI_InvalidURL(t *testing.T) {
 	}
 }
 
-func TestAPI_ExtraOverridesBaseParams(t *testing.T) {
+func TestAPI_ExtraCannotOverrideBaseParams(t *testing.T) {
 	var gotCmd, gotAPIKey string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotCmd = r.URL.Query().Get("cmd")
@@ -120,16 +122,18 @@ func TestAPI_ExtraOverridesBaseParams(t *testing.T) {
 	defer srv.Close()
 
 	c := newTestClient(srv.URL, "base-key", srv.Client())
+	// A caller-supplied extra must not clobber the command or the API
+	// credential: requestURL applies cmd/apikey after merging extra.
 	extra := url.Values{"cmd": {"override_cmd"}, "apikey": {"override-key"}}
 	_, err := c.API(context.Background(), "base_cmd", extra)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if gotCmd != "override_cmd" {
-		t.Errorf("cmd = %q, want override_cmd", gotCmd)
+	if gotCmd != "base_cmd" {
+		t.Errorf("cmd = %q, want base_cmd (extra must not override the command)", gotCmd)
 	}
-	if gotAPIKey != "override-key" {
-		t.Errorf("apikey = %q, want override-key", gotAPIKey)
+	if gotAPIKey != "base-key" {
+		t.Errorf("apikey = %q, want base-key (extra must not override the credential)", gotAPIKey)
 	}
 }
 
@@ -363,5 +367,105 @@ func TestAPIWithRetry_DoesNotLogAPIKey(t *testing.T) {
 	}
 	if !strings.Contains(logged, "retries exhausted") {
 		t.Errorf("expected httpx retry diagnostics in log output, got:\n%s", logged)
+	}
+}
+
+func TestUpdateMetadata_SendsParamsAndSucceeds(t *testing.T) {
+	var gotCmd, gotOld, gotNew, gotType string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotCmd = r.URL.Query().Get("cmd")
+		gotOld = r.URL.Query().Get("old_rating_key")
+		gotNew = r.URL.Query().Get("new_rating_key")
+		gotType = r.URL.Query().Get("media_type")
+		w.Write([]byte(`{"response":{"result":"success"}}`))
+	}))
+	defer srv.Close()
+
+	c := newTestClient(srv.URL, "k", srv.Client())
+	if err := c.UpdateMetadata(context.Background(), "100", "200", remap.Movie); err != nil {
+		t.Fatal(err)
+	}
+	if gotCmd != "update_metadata_details" {
+		t.Errorf("cmd = %q, want update_metadata_details", gotCmd)
+	}
+	if gotOld != "100" || gotNew != "200" || gotType != "movie" {
+		t.Errorf("params: old=%q new=%q type=%q, want 100/200/movie", gotOld, gotNew, gotType)
+	}
+}
+
+func TestUpdateMetadata_NonSuccessReturnsError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Write([]byte(`{"response":{"result":"error","message":"boom"}}`))
+	}))
+	defer srv.Close()
+
+	c := newTestClient(srv.URL, "k", srv.Client())
+	err := c.UpdateMetadata(context.Background(), "100", "200", remap.Movie)
+	if err == nil {
+		t.Fatal("expected error for non-success result")
+	}
+	if !strings.Contains(err.Error(), "boom") {
+		t.Errorf("error = %v, want it to include the API message", err)
+	}
+}
+
+func TestDeleteRecentlyAdded_SendsCmdAndSucceeds(t *testing.T) {
+	var gotCmd string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotCmd = r.URL.Query().Get("cmd")
+		w.Write([]byte(`{"response":{"result":"success"}}`))
+	}))
+	defer srv.Close()
+
+	c := newTestClient(srv.URL, "k", srv.Client())
+	if err := c.DeleteRecentlyAdded(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if gotCmd != "delete_recently_added" {
+		t.Errorf("cmd = %q, want delete_recently_added", gotCmd)
+	}
+}
+
+func TestDeleteRecentlyAdded_NonSuccessReturnsError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Write([]byte(`{"response":{"result":"error","message":"nope"}}`))
+	}))
+	defer srv.Close()
+
+	c := newTestClient(srv.URL, "k", srv.Client())
+	if err := c.DeleteRecentlyAdded(context.Background()); err == nil {
+		t.Fatal("expected error for non-success result")
+	}
+}
+
+func TestGetHistory_MalformedBodyReturnsParseError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Write([]byte(`{"response":{"data":{"data":[`)) // truncated JSON, HTTP 200
+	}))
+	defer srv.Close()
+
+	c := newTestClient(srv.URL, "k", srv.Client())
+	_, err := c.GetHistory(context.Background(), nil)
+	if err == nil {
+		t.Fatal("expected a parse error for a malformed 200 body")
+	}
+	if !strings.Contains(err.Error(), "parsing history") {
+		t.Errorf("error = %v, want it wrapped with \"parsing history\"", err)
+	}
+}
+
+func TestUpdateMetadata_MalformedBodyReturnsParseError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Write([]byte(`{not json`))
+	}))
+	defer srv.Close()
+
+	c := newTestClient(srv.URL, "k", srv.Client())
+	err := c.UpdateMetadata(context.Background(), "100", "200", remap.Movie)
+	if err == nil {
+		t.Fatal("expected a parse error for a malformed body")
+	}
+	if !strings.Contains(err.Error(), "parsing update_metadata_details") {
+		t.Errorf("error = %v, want it wrapped with \"parsing update_metadata_details\"", err)
 	}
 }

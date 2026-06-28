@@ -72,10 +72,13 @@ func New(tautulliURL, apiKey string, httpClient *http.Client) *Client {
 // requestURL builds the Tautulli API v2 URL for cmd with the api key and any
 // extra query params. The api key rides in the query string: httpx redacts it
 // from APIWithRetry's logs and errors, and httpx.RedactSecret strips it from
-// bare-API transport errors.
+// bare-API transport errors. cmd and apikey are applied after extra is merged,
+// so a caller-supplied extra can never override the command or the credential.
 func (c *Client) requestURL(cmd string, extra url.Values) string {
-	params := url.Values{"cmd": {cmd}, "apikey": {c.apiKey}}
+	params := url.Values{}
 	maps.Copy(params, extra)
+	params.Set("cmd", cmd)
+	params.Set("apikey", c.apiKey)
 	return c.url + "/api/v2?" + params.Encode()
 }
 
@@ -100,7 +103,11 @@ func (c *Client) API(ctx context.Context, cmd string, extra url.Values) ([]byte,
 		httpx.DrainClose(resp.Body)
 		return nil, fmt.Errorf("tautulli %s: HTTP %d", cmd, resp.StatusCode)
 	}
-	return io.ReadAll(io.LimitReader(resp.Body, maxTautulliBody))
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxTautulliBody))
+	if err != nil {
+		return nil, fmt.Errorf("tautulli %s: %w", cmd, httpx.RedactSecret(err, c.apiKey))
+	}
+	return body, nil
 }
 
 // APIWithRetry performs a GET against the Tautulli API with bounded
@@ -134,12 +141,25 @@ func (c *Client) GetHistory(ctx context.Context, params url.Values) (*HistoryPag
 		return nil, fmt.Errorf("parsing history: %w", err)
 	}
 	if resp.Response.Result != resultSuccess {
-		return nil, fmt.Errorf("get_history: %s", resp.Response.Message)
+		return nil, fmt.Errorf("get_history: result=%q message=%q", resp.Response.Result, resp.Response.Message)
 	}
 	return &HistoryPage{
 		Rows:            resp.Response.Data.Data,
 		RecordsFiltered: resp.Response.Data.RecordsFiltered,
 	}, nil
+}
+
+// checkResult unmarshals a generic Tautulli result envelope and returns an
+// error if the API reported anything other than success.
+func checkResult(body []byte, cmd string) error {
+	var resp Result
+	if err := json.Unmarshal(body, &resp); err != nil {
+		return fmt.Errorf("parsing %s: %w", cmd, err)
+	}
+	if resp.Response.Result != resultSuccess {
+		return fmt.Errorf("%s: result=%q message=%q", cmd, resp.Response.Result, resp.Response.Message)
+	}
+	return nil
 }
 
 // UpdateMetadata updates the Tautulli history records for a renamed Plex item,
@@ -154,14 +174,7 @@ func (c *Client) UpdateMetadata(ctx context.Context, oldKey, newKey string, medi
 	if err != nil {
 		return err
 	}
-	var resp Result
-	if err := json.Unmarshal(body, &resp); err != nil {
-		return fmt.Errorf("parsing update_metadata_details: %w", err)
-	}
-	if resp.Response.Result != resultSuccess {
-		return fmt.Errorf("update_metadata_details: %s", resp.Response.Message)
-	}
-	return nil
+	return checkResult(body, "update_metadata_details")
 }
 
 // DeleteRecentlyAdded clears all entries from Tautulli's recently-added table.
@@ -170,14 +183,7 @@ func (c *Client) DeleteRecentlyAdded(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	var resp Result
-	if err := json.Unmarshal(body, &resp); err != nil {
-		return fmt.Errorf("parsing delete_recently_added: %w", err)
-	}
-	if resp.Response.Result != resultSuccess {
-		return fmt.Errorf("delete_recently_added: %s", resp.Response.Message)
-	}
-	return nil
+	return checkResult(body, "delete_recently_added")
 }
 
 // retryDelayUnit returns the configured retry delay unit or the default.

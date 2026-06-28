@@ -63,7 +63,7 @@ func TestExtractAfter_never_panics(t *testing.T) {
 	rapid.Check(t, func(t *rapid.T) {
 		s := rapid.String().Draw(t, "s")
 		prefix := rapid.String().Draw(t, "prefix")
-		_ = ExtractAfter(s, prefix)
+		_ = extractAfter(s, prefix)
 	})
 }
 
@@ -73,12 +73,12 @@ func TestExtractAfter_strips_query_params(t *testing.T) {
 		id := rapid.StringMatching(`[a-zA-Z0-9]{1,20}`).Draw(t, "id")
 		query := rapid.StringMatching(`[a-z]{1,10}=[a-z]{1,10}`).Draw(t, "query")
 		input := prefix + id + "?" + query
-		result := ExtractAfter(input, prefix)
+		result := extractAfter(input, prefix)
 		if strings.Contains(result, "?") {
-			t.Errorf("ExtractAfter(%q, %q) = %q, still contains query params", input, prefix, result)
+			t.Errorf("extractAfter(%q, %q) = %q, still contains query params", input, prefix, result)
 		}
 		if result != id {
-			t.Errorf("ExtractAfter(%q, %q) = %q, want %q", input, prefix, result, id)
+			t.Errorf("extractAfter(%q, %q) = %q, want %q", input, prefix, result, id)
 		}
 	})
 }
@@ -109,11 +109,11 @@ func TestMatchStaleItems_partition_property(t *testing.T) {
 			t2 := strings.ToLower(strings.TrimSpace(title))
 			if t2 != "" && rapid.Bool().Draw(t, fmt.Sprintf("in_ty_map_%d", i)) {
 				newKey := strconv.Itoa(300 + i)
-				byTitleYear[t2+"|"+year] = PlexEntry{RatingKey: newKey, Title: title, Year: year, Type: mediaType}
+				byTitleYear[titleYearKey(t2, year, mediaType)] = PlexEntry{RatingKey: newKey, Title: title, Year: year, Type: mediaType}
 			}
 			if t2 != "" && rapid.Bool().Draw(t, fmt.Sprintf("in_t_map_%d", i)) {
 				newKey := strconv.Itoa(400 + i)
-				byTitle[t2] = PlexEntry{RatingKey: newKey, Title: title, Year: year, Type: mediaType}
+				byTitle[titleKey(t2, mediaType)] = PlexEntry{RatingKey: newKey, Title: title, Year: year, Type: mediaType}
 			}
 		}
 
@@ -185,6 +185,17 @@ func TestProcessHistoryRow_never_removes_entries(t *testing.T) {
 			if items[k].Title != title {
 				t.Errorf("existing entry %q changed from %q to %q", k, title, items[k].Title)
 			}
+		}
+	})
+}
+
+func TestNormalizeTitle_idempotent(t *testing.T) {
+	rapid.Check(t, func(t *rapid.T) {
+		s := rapid.String().Draw(t, "s")
+		once := NormalizeTitle(s)
+		twice := NormalizeTitle(once)
+		if once != twice {
+			t.Errorf("NormalizeTitle not idempotent: NormalizeTitle(%q)=%q, NormalizeTitle(%q)=%q", s, once, once, twice)
 		}
 	})
 }

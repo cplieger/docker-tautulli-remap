@@ -153,6 +153,13 @@ func FuzzMatchOne(f *testing.F) {
 	f.Add("Test Movie", "imdb://tt1234567", "movie")
 	f.Add("", "", "")
 	f.Add("Show Title", "tvdb://12345", "show")
+	// A movie history row carrying a show's GUID: matchOne strategy 1 must NOT
+	// match it, because byGUID is keyed by the bare GUID (not media type) and
+	// matchOne guards on type explicitly; without that guard it would wrongly
+	// return the show's key. Seeding the cross-type case makes the type-safety
+	// invariant below fail deterministically on every PR if the guard regresses,
+	// not only under coverage-guided fuzzing.
+	f.Add("Show Title", "tvdb://12345", "movie")
 	f.Fuzz(func(t *testing.T, title, guid, mediaType string) {
 		mt := ParseMediaType(mediaType)
 		item := &TautulliEntry{
@@ -167,128 +174,30 @@ func FuzzMatchOne(f *testing.F) {
 			"tvdb://12345":     {RatingKey: "300", Title: "S", Year: "2021", Type: Show},
 		}
 		byTitleYear := map[string]PlexEntry{
-			"test movie|2020": {RatingKey: "400", Title: "Test Movie", Year: "2020", Type: Movie},
+			"test movie|2020|movie": {RatingKey: "400", Title: "Test Movie", Year: "2020", Type: Movie},
 		}
 		byTitle := map[string]PlexEntry{
-			"show title": {RatingKey: "500", Title: "Show Title", Year: "2021", Type: Show},
+			"show title|show": {RatingKey: "500", Title: "Show Title", Year: "2021", Type: Show},
 		}
 		validKeys := map[string]bool{"200": true, "300": true, "400": true, "500": true}
 
-		// Must never panic
-		newKey, _ := MatchOne(item, "100", byGUID, byTitleYear, byTitle, true, true)
+		newKey, method := matchOne(item, "100", byGUID, byTitleYear, byTitle, true, true)
 
-		// Result must be either empty or from the input maps
+		// A returned key is never invented: it must be one of the index entries.
 		if newKey != "" && !validKeys[newKey] {
-			t.Errorf("MatchOne returned key %q which is not in the input maps", newKey)
+			t.Errorf("matchOne returned key %q which is not in the input maps", newKey)
 		}
-	})
-}
-
-// --- JSON unmarshal fuzz targets ---
-// These use local struct equivalents to avoid circular imports with the
-// tautulli and plex packages which import remap.
-
-func FuzzHistoryResponseUnmarshal(f *testing.F) {
-	f.Add([]byte(`{"response":{"result":"success","data":{"data":[{"title":"M","media_type":"movie","rating_key":1,"year":2020,"guid":"imdb://tt1"}],"recordsFiltered":1}}}`))
-	f.Add([]byte(`{}`))
-	f.Add([]byte(`{"response":{"result":"error","message":"bad"}}`))
-	f.Add([]byte(`null`))
-	f.Fuzz(func(t *testing.T, data []byte) {
-		// Local equivalent of tautulli.HistoryResponse
-		var resp struct {
-			Response struct {
-				Result  string `json:"result"`
-				Message string `json:"message"`
-				Data    struct {
-					Data            []HistoryItem `json:"data"`
-					RecordsFiltered int           `json:"recordsFiltered"`
-				} `json:"data"`
-			} `json:"response"`
+		// Old-key guard: every strategy must refuse to return the stale key itself.
+		if newKey == "100" {
+			t.Errorf("matchOne returned the old key (self-remap) for %+v", *item)
 		}
-		if err := json.Unmarshal(data, &resp); err != nil {
-			return
-		}
-		if resp.Response.Data.RecordsFiltered < 0 {
-			t.Errorf("recordsFiltered = %d, want >= 0", resp.Response.Data.RecordsFiltered)
-		}
-		for i, item := range resp.Response.Data.Data {
-			// Exercise FlexInt fields - must not panic
-			_ = int(item.RatingKey)
-			_ = int(item.Year)
-			_ = int(item.GrandparentRatingKey)
-			_ = item.Title
-			_ = item.MediaType
-			if int(item.RatingKey) < 0 {
-				t.Errorf("data[%d].RatingKey = %d, want >= 0 if parsed", i, int(item.RatingKey))
-			}
-		}
-	})
-}
-
-func FuzzPlexLibrarySectionsUnmarshal(f *testing.F) {
-	f.Add([]byte(`{"MediaContainer":{"Directory":[{"key":"1","title":"Movies","type":"movie"}]}}`))
-	f.Add([]byte(`{}`))
-	f.Add([]byte(`{"MediaContainer":{"Directory":[]}}`))
-	f.Add([]byte(`null`))
-	f.Fuzz(func(t *testing.T, data []byte) {
-		var result struct {
-			MediaContainer struct {
-				Directory []struct {
-					Key   string `json:"key"`
-					Title string `json:"title"`
-					Type  string `json:"type"`
-				} `json:"Directory"`
-			} `json:"MediaContainer"`
-		}
-		if err := json.Unmarshal(data, &result); err != nil {
-			return
-		}
-		for _, d := range result.MediaContainer.Directory {
-			// Non-empty key is the expected invariant of well-formed Plex
-			// responses. We verify field access never panics.
-			if d.Key == "" {
-				// Not a valid Plex section entry; skip further checks.
-				continue
-			}
-			_ = d.Title
-			_ = d.Type
-		}
-	})
-}
-
-func FuzzPlexLibraryAllUnmarshal(f *testing.F) {
-	f.Add([]byte(`{"MediaContainer":{"Metadata":[{"title":"Movie","ratingKey":"123","guid":"tmdb://1","Guid":[{"id":"imdb://tt1"}],"year":2020}]}}`))
-	f.Add([]byte(`{}`))
-	f.Add([]byte(`{"MediaContainer":{"Metadata":[]}}`))
-	f.Add([]byte(`null`))
-	f.Fuzz(func(t *testing.T, data []byte) {
-		var result struct {
-			MediaContainer struct {
-				Metadata []struct {
-					Title     string `json:"title"`
-					RatingKey string `json:"ratingKey"`
-					GUID      string `json:"guid"`
-					Guids     []struct {
-						ID string `json:"id"`
-					} `json:"Guid"`
-					Year int `json:"year"`
-				} `json:"Metadata"`
-			} `json:"MediaContainer"`
-		}
-		if err := json.Unmarshal(data, &result); err != nil {
-			return
-		}
-		for _, m := range result.MediaContainer.Metadata {
-			// Exercise strconv.Atoi on ratingKey - must not panic
-			if rk, err := strconv.Atoi(m.RatingKey); err == nil {
-				if rk < 0 {
-					t.Errorf("ratingKey %q parsed to %d, want non-negative", m.RatingKey, rk)
-				}
-			}
-			// Exercise NormalizeGUID on guid and each Guid[].id - must not panic
-			_ = NormalizeGUID(m.GUID)
-			for _, g := range m.Guids {
-				_ = NormalizeGUID(g.ID)
+		// Cross-type safety: byGUID is keyed by the bare GUID (not by media type),
+		// so a GUID-method match must have passed matchOne's explicit media-type
+		// guard -- a movie must never remap onto a same-GUID show, or vice versa.
+		if method == MethodGUID {
+			if pe := byGUID[item.GUID]; pe.Type != item.MediaType {
+				t.Errorf("GUID match crossed media type: item type %q matched %q-typed entry %q",
+					item.MediaType, pe.Type, newKey)
 			}
 		}
 	})

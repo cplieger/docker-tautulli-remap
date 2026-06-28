@@ -70,7 +70,8 @@ func (r RatingKey) IsValid() bool {
 	return true
 }
 
-// FlexInt handles JSON values that may be float64, string, or json.Number.
+// FlexInt unmarshals a JSON number or a quoted numeric string into an int,
+// coercing empty, null, or otherwise non-numeric JSON values to zero.
 type FlexInt int
 
 // UnmarshalJSON implements json.Unmarshaler.
@@ -155,10 +156,10 @@ type GUIDMapping struct {
 	StripPath bool
 }
 
-// GUID prefix literals (see GUIDMappings for semantics). Each "<name>://"
-// string is used in both the Source column and the Canonical column of the
-// mapping table, so hoisting them into constants avoids drift when tests
-// reference canonical prefixes.
+// GUID prefix literals (see GUIDMappings for semantics). Most appear in both
+// the Source and Canonical columns of the mapping table; themoviedb:// and
+// thetvdb:// are Source-only, canonicalizing to tmdb:// and tvdb://. Hoisting
+// them into constants avoids drift when tests reference canonical prefixes.
 const (
 	GUIDPrefixTheMovieDB = "themoviedb://"
 	GUIDPrefixTheTVDB    = "thetvdb://"
@@ -170,6 +171,13 @@ const (
 )
 
 // GUIDMappings defines the known GUID prefix transformations.
+//
+// ORDER IS SIGNIFICANT. NormalizeGUID matches each Source with strings.Contains
+// (substring, not prefix) and returns on the first hit, so any Source that embeds a
+// shorter one as a substring MUST be listed first: "thetvdb://" contains "tvdb://",
+// so the StripPath=true thetvdb entry has to precede the bare tvdb entry, or legacy
+// "thetvdb://<id>/<season>/<ep>" GUIDs would resolve via tvdb and never strip to the
+// series id. Do not reorder (e.g. alphabetize) without preserving this invariant.
 var GUIDMappings = [...]GUIDMapping{
 	{GUIDPrefixTheMovieDB, GUIDPrefixTMDB, false},
 	{GUIDPrefixTheTVDB, GUIDPrefixTVDB, true},

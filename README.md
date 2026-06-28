@@ -27,7 +27,7 @@ For each stale entry, it attempts to find the correct current rating key in Plex
 - **Three run modes** — `SCHEDULE_INTERVAL (e.g. "24h")` for a built-in timer, `SCHEDULE_INTERVAL=off` for resident-idle (stays healthy, awaits `docker exec ... tautulli-remap trigger`), or `tautulli-remap trigger` for a one-shot pass that exits 0/1.
 - **Dry-run by default for safety** — no changes are applied until you explicitly set `DRY_RUN=false`, so you can always preview first.
 - **Three matching strategies with increasing aggressiveness** — starts with the safest (GUID), falls back to title+year, and optionally title-only, giving you control over the risk/coverage tradeoff.
-- **Stdlib-only, zero external dependencies** — pure Go with no third-party modules, minimizing supply-chain risk.
+- **Stdlib-first, minimal dependencies** — pure Go on the standard library plus a small first-party shared-lib set (`health`, `httpx`) and `golang.org/x/sync`, minimizing supply-chain risk.
 - **Distroless and rootless** — runs as `nonroot` on `gcr.io/distroless/static` with no shell or package manager.
 
 ## Quick start
@@ -122,8 +122,12 @@ under the hardened compose profile
 `no-new-privileges:true`, 16 MB tmpfs for `/tmp`).
 
 **Details for advanced users:** All HTTP clients use explicit
-timeouts (2 min client, 30s per-request). Response bodies capped
-via `io.LimitReader` (50 MB Tautulli, 100 MB Plex). Rating keys
+timeouts (2 min client, 30s per direct request, 60s for the Plex
+library fetch). Transient failures on Tautulli and Plex reads are
+retried with bounded backoff (each attempt within the 2-min client
+timeout); mutating Tautulli calls are never retried.
+Response bodies capped
+via `io.LimitReader` (30 MB Tautulli, 40 MB Plex library / 10 MB sections). Rating keys
 validated as numeric before URL interpolation (prevents path
 traversal). Plex token sent via `X-Plex-Token` header, not query
 string. HTTP error messages sanitized to strip query parameters

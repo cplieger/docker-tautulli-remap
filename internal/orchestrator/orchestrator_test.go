@@ -3,6 +3,7 @@ package orchestrator
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -22,38 +23,30 @@ import (
 
 type fakePlex struct{}
 
-func (f *fakePlex) ItemExists(_ context.Context, _ string) bool { return true }
-func (f *fakePlex) LibrarySections(_ context.Context) []plex.Section {
-	return []plex.Section{{Key: "1", Title: "Movies", Type: "movie"}}
+func (f *fakePlex) ItemExists(_ context.Context, _ string) (bool, error) { return true, nil }
+func (f *fakePlex) LibrarySections(_ context.Context) ([]remap.Section, error) {
+	return []remap.Section{{Key: "1", Title: "Movies", Type: "movie"}}, nil
 }
 
-func (f *fakePlex) LibraryAll(_ context.Context, _ string) []plex.LibItem {
-	return []plex.LibItem{{RatingKey: 1, Title: "Test", Year: 2020, GUIDs: []string{"imdb://tt0001"}}}
+func (f *fakePlex) LibraryAll(_ context.Context, _ string) ([]remap.LibItem, error) {
+	return []remap.LibItem{{RatingKey: 1, Title: "Test", Year: 2020, GUIDs: []string{"imdb://tt0001"}}}, nil
 }
 
-type fakeTautulli struct{ calls []string }
+type fakeTautulli struct{}
 
-func (f *fakeTautulli) API(_ context.Context, cmd string, _ url.Values) ([]byte, error) {
-	f.calls = append(f.calls, cmd)
+func (f *fakeTautulli) APIWithRetry(_ context.Context, _ string, _ url.Values) ([]byte, error) {
 	return []byte(`{"response":{"result":"success","data":{"recordsFiltered":0,"data":[]}}}`), nil
 }
 
-func (f *fakeTautulli) APIWithRetry(ctx context.Context, cmd string, params url.Values) ([]byte, error) {
-	return f.API(ctx, cmd, params)
-}
-
 func (f *fakeTautulli) GetHistory(_ context.Context, _ url.Values) (*tautulli.HistoryPage, error) {
-	f.calls = append(f.calls, "get_history")
 	return &tautulli.HistoryPage{Rows: nil, RecordsFiltered: 0}, nil
 }
 
 func (f *fakeTautulli) UpdateMetadata(_ context.Context, _, _ string, _ remap.MediaType) error {
-	f.calls = append(f.calls, "update_metadata_details")
 	return nil
 }
 
 func (f *fakeTautulli) DeleteRecentlyAdded(_ context.Context) error {
-	f.calls = append(f.calls, "delete_recently_added")
 	return nil
 }
 
@@ -313,7 +306,10 @@ func TestFindStaleKeys_IdentifiesStaleAndValid(t *testing.T) {
 		"42":  {RatingKey: "42", Title: "Valid", MediaType: remap.Movie},
 		"999": {RatingKey: "999", Title: "Stale", MediaType: remap.Movie},
 	}
-	stale := orch.FindStaleKeys(context.Background(), items)
+	stale, err := orch.FindStaleKeys(context.Background(), items)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
 	if len(stale) != 1 {
 		t.Fatalf("expected 1 stale, got %d", len(stale))
 	}
@@ -330,7 +326,10 @@ func TestFindStaleKeys_AllValid(t *testing.T) {
 	items := map[string]remap.TautulliEntry{
 		"1": {RatingKey: "1", Title: "A", MediaType: remap.Movie},
 	}
-	stale := orch.FindStaleKeys(context.Background(), items)
+	stale, err := orch.FindStaleKeys(context.Background(), items)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
 	if len(stale) != 0 {
 		t.Errorf("expected 0 stale, got %d", len(stale))
 	}
@@ -346,7 +345,7 @@ func TestFindStaleKeys_CancelledContext(t *testing.T) {
 	items := map[string]remap.TautulliEntry{
 		"1": {RatingKey: "1", Title: "A", MediaType: remap.Movie},
 	}
-	_ = orch.FindStaleKeys(ctx, items)
+	_, _ = orch.FindStaleKeys(ctx, items)
 }
 
 func TestFindStaleKeys_ProgressLogBoundary(t *testing.T) {
@@ -359,7 +358,10 @@ func TestFindStaleKeys_ProgressLogBoundary(t *testing.T) {
 		k := strconv.Itoa(i)
 		items[k] = remap.TautulliEntry{RatingKey: k, Title: "M", MediaType: remap.Movie}
 	}
-	stale := orch.FindStaleKeys(context.Background(), items)
+	stale, err := orch.FindStaleKeys(context.Background(), items)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
 	if len(stale) != 250 {
 		t.Errorf("expected 250 stale, got %d", len(stale))
 	}
@@ -389,7 +391,10 @@ func TestBuildPlexIndex_AllThreeIndexes(t *testing.T) {
 		}
 	})
 	pc := plex.New(cfg.PlexURL, cfg.PlexToken, &http.Client{})
-	byGUID, byTitleYear, byTitle := remap.BuildPlexIndex(context.Background(), pc, 8)
+	byGUID, byTitleYear, byTitle, failed := remap.BuildPlexIndex(context.Background(), pc, 8)
+	if failed != 0 {
+		t.Errorf("failedSections = %d, want 0 (all scanned sections returned 200)", failed)
+	}
 
 	if _, ok := byGUID["imdb://tt0133093"]; !ok {
 		t.Error("expected imdb GUID in byGUID")
@@ -400,17 +405,17 @@ func TestBuildPlexIndex_AllThreeIndexes(t *testing.T) {
 	if _, ok := byGUID["tvdb://81189"]; !ok {
 		t.Error("expected tvdb GUID in byGUID")
 	}
-	if _, ok := byTitleYear["the matrix|1999"]; !ok {
-		t.Error("expected 'the matrix|1999' in byTitleYear")
+	if _, ok := byTitleYear["the matrix|1999|movie"]; !ok {
+		t.Error("expected 'the matrix|1999|movie' in byTitleYear")
 	}
-	if _, ok := byTitleYear["breaking bad|2008"]; !ok {
-		t.Error("expected 'breaking bad|2008' in byTitleYear")
+	if _, ok := byTitleYear["breaking bad|2008|show"]; !ok {
+		t.Error("expected 'breaking bad|2008|show' in byTitleYear")
 	}
-	if _, ok := byTitle["the matrix"]; !ok {
-		t.Error("expected 'the matrix' in byTitle")
+	if _, ok := byTitle["the matrix|movie"]; !ok {
+		t.Error("expected 'the matrix|movie' in byTitle")
 	}
-	if _, ok := byTitle["breaking bad"]; !ok {
-		t.Error("expected 'breaking bad' in byTitle")
+	if _, ok := byTitle["breaking bad|show"]; !ok {
+		t.Error("expected 'breaking bad|show' in byTitle")
 	}
 }
 
@@ -426,7 +431,10 @@ func TestBuildPlexIndex_SkipsNonMovieShowSections(t *testing.T) {
 		}
 	})
 	pc := plex.New(cfg.PlexURL, cfg.PlexToken, &http.Client{})
-	byGUID, byTitleYear, byTitle := remap.BuildPlexIndex(context.Background(), pc, 8)
+	byGUID, byTitleYear, byTitle, failed := remap.BuildPlexIndex(context.Background(), pc, 8)
+	if failed != 0 {
+		t.Errorf("failedSections = %d, want 0 (non-movie/show sections are skipped, not failed)", failed)
+	}
 	if len(byGUID) != 0 || len(byTitleYear) != 0 || len(byTitle) != 0 {
 		t.Error("expected empty indexes for music-only library")
 	}
@@ -449,7 +457,7 @@ func TestBuildPlexIndex_CancelBetweenSections(t *testing.T) {
 		}
 	})
 	pc := plex.New(cfg.PlexURL, cfg.PlexToken, &http.Client{})
-	byGUID, byTitleYear, byTitle := remap.BuildPlexIndex(ctx, pc, 1)
+	byGUID, byTitleYear, byTitle, _ := remap.BuildPlexIndex(ctx, pc, 1)
 	if got := sectionAllHits.Load(); got != 1 {
 		t.Errorf("expected 1 section fetch before cancel, got %d", got)
 	}
@@ -472,6 +480,30 @@ func TestApplyRemappings_DryRun(t *testing.T) {
 	orch.ApplyRemappings(context.Background(), matched, nil)
 	if calls != 0 {
 		t.Errorf("expected 0 API calls in dry run, got %d", calls)
+	}
+}
+
+func TestApplyRemappings_DryRunPreviewLoggedAtInfo(t *testing.T) {
+	var buf strings.Builder
+	orig := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, nil)))
+	t.Cleanup(func() { slog.SetDefault(orig) })
+
+	o := New(&fakePlex{}, &fakeTautulli{}, &config.Config{DryRun: true})
+	matched := []remap.MatchResult{
+		{Title: "Movie A", Year: "2020", OldKey: "100", NewKey: "200", MediaType: remap.Movie, Method: remap.MethodGUID},
+	}
+	o.ApplyRemappings(context.Background(), matched, nil)
+
+	out := buf.String()
+	if !strings.Contains(out, "msg=remap") {
+		t.Errorf("dry-run per-item preview must log at INFO so an operator previews changes at the default log level; got log:\n%s", out)
+	}
+	if !strings.Contains(out, "old_key=100") || !strings.Contains(out, "new_key=200") {
+		t.Errorf("dry-run preview must name the would-be remap keys (old_key=100 new_key=200); got log:\n%s", out)
+	}
+	if !strings.Contains(out, "dry_run=true") {
+		t.Errorf("dry-run preview must record dry_run=true; got log:\n%s", out)
 	}
 }
 
@@ -504,7 +536,16 @@ func TestApplyRemappings_APIError(t *testing.T) {
 	matched := []remap.MatchResult{
 		{Title: "Movie A", Year: "2020", OldKey: "100", NewKey: "200", MediaType: remap.Movie, Method: remap.MethodGUID},
 	}
-	orch.ApplyRemappings(context.Background(), matched, nil)
+	updated, failed, aborted := orch.ApplyRemappings(context.Background(), matched, nil)
+	if updated != 0 {
+		t.Errorf("updated = %d, want 0 (the only remap failed)", updated)
+	}
+	if failed != 1 {
+		t.Errorf("failed = %d, want 1 (the single 500 response is one failed remap)", failed)
+	}
+	if aborted {
+		t.Error("aborted = true, want false (a single failure must not trip the 10-failure breaker)")
+	}
 }
 
 func TestApplyRemappings_EmptyMatched(t *testing.T) {
@@ -551,7 +592,7 @@ func TestApplyRemappings_AbortsAfterConsecutiveFailures(t *testing.T) {
 			MediaType: remap.Movie, Method: remap.MethodGUID,
 		}
 	}
-	updated, failed := orch.ApplyRemappings(context.Background(), matched, nil)
+	updated, failed, aborted := orch.ApplyRemappings(context.Background(), matched, nil)
 	if updated != 0 {
 		t.Errorf("updated = %d, want 0", updated)
 	}
@@ -560,6 +601,9 @@ func TestApplyRemappings_AbortsAfterConsecutiveFailures(t *testing.T) {
 	}
 	if failed != 10 {
 		t.Errorf("failed = %d, want 10", failed)
+	}
+	if !aborted {
+		t.Error("aborted = false, want true (breaker tripped after 10 consecutive failures)")
 	}
 }
 
@@ -738,7 +782,7 @@ func TestRun_EmptyPlexIndex(t *testing.T) {
 	}
 }
 
-func TestRun_BackupFailureContinues(t *testing.T) {
+func TestRun_BackupFailureAborts(t *testing.T) {
 	callCounts := map[string]int{}
 	cfg := testServer(t, func(w http.ResponseWriter, r *http.Request) {
 		cmd := r.URL.Query().Get("cmd")
@@ -754,13 +798,486 @@ func TestRun_BackupFailureContinues(t *testing.T) {
 	})
 	cfg.DryRun = false
 	orch := newOrch(t, cfg)
-	if !orch.Run(context.Background()) {
-		t.Error("expected true even when backup fails")
+	if orch.Run(context.Background()) {
+		t.Error("Run() = true, want false when backup_db fails in live mode (no recovery point, must abort)")
 	}
 	if callCounts["backup_db"] != 3 {
 		t.Errorf("expected backup_db called 3 times via retry, got %d", callCounts["backup_db"])
 	}
-	if callCounts["get_history"] != 1 {
-		t.Errorf("expected get_history called, got %d", callCounts["get_history"])
+	if callCounts["get_history"] != 0 {
+		t.Errorf("expected get_history NOT called (run aborts before step 1), got %d", callCounts["get_history"])
+	}
+}
+
+func TestRun_AllRemapsFail_ReturnsFalse(t *testing.T) {
+	cfg := testServer(t, func(w http.ResponseWriter, r *http.Request) {
+		cmd := r.URL.Query().Get("cmd")
+		switch {
+		case cmd == "get_history":
+			w.Write([]byte(`{"response":{"result":"success","data":{
+				"recordsFiltered":1,
+				"data":[{"rating_key":100,"title":"Stale Movie","year":2020,"media_type":"movie","guid":"imdb://tt1111111"}]
+			}}}`))
+		case cmd == "update_metadata_details":
+			w.WriteHeader(http.StatusInternalServerError)
+		case strings.HasSuffix(r.URL.Path, "/library/metadata/100"):
+			w.WriteHeader(http.StatusNotFound)
+		case strings.HasSuffix(r.URL.Path, "/library/sections"):
+			w.Write([]byte(`{"MediaContainer":{"Directory":[{"key":"1","title":"Movies","type":"movie"}]}}`))
+		case strings.Contains(r.URL.Path, "/sections/1/all"):
+			w.Write([]byte(`{"MediaContainer":{"Metadata":[
+				{"title":"Stale Movie","ratingKey":"200","year":2020,
+				 "guid":"plex://movie/x","Guid":[{"id":"imdb://tt1111111"}]}
+			]}}`))
+		default:
+			w.Write([]byte(`{}`))
+		}
+	})
+	cfg.DryRun = false
+	orch := newOrch(t, cfg)
+	if orch.Run(context.Background()) {
+		t.Error("Run() = true, want false when the only stale item failed to remap (updated=0, failed=1)")
+	}
+}
+
+func TestPaginationDelay_DefaultWhenUnset(t *testing.T) {
+	o := New(&fakePlex{}, &fakeTautulli{}, &config.Config{})
+	if got := o.paginationDelay(); got != defaultPaginationDelay {
+		t.Errorf("paginationDelay() = %v, want %v (default)", got, defaultPaginationDelay)
+	}
+}
+
+func TestRun_AbortsOnPartialSectionFailure(t *testing.T) {
+	cfg := testServer(t, func(w http.ResponseWriter, r *http.Request) {
+		cmd := r.URL.Query().Get("cmd")
+		switch {
+		case cmd == "get_history":
+			w.Write([]byte(`{"response":{"result":"success","data":{
+				"recordsFiltered":1,
+				"data":[{"rating_key":100,"title":"Stale Movie","year":2020,"media_type":"movie","guid":"imdb://tt1111111"}]
+			}}}`))
+		case strings.HasSuffix(r.URL.Path, "/library/metadata/100"):
+			w.WriteHeader(http.StatusNotFound)
+		case strings.HasSuffix(r.URL.Path, "/library/sections"):
+			w.Write([]byte(`{"MediaContainer":{"Directory":[
+				{"key":"1","title":"Movies","type":"movie"},
+				{"key":"2","title":"Movies 4K","type":"movie"}
+			]}}`))
+		case strings.Contains(r.URL.Path, "/sections/1/all"):
+			w.Write([]byte(`{"MediaContainer":{"Metadata":[
+				{"title":"Stale Movie","ratingKey":"200","year":2020,
+				 "guid":"plex://movie/x","Guid":[{"id":"imdb://tt1111111"}]}
+			]}}`))
+		case strings.Contains(r.URL.Path, "/sections/2/all"):
+			w.WriteHeader(http.StatusInternalServerError)
+		default:
+			w.Write([]byte(`{}`))
+		}
+	})
+	cfg.DryRun = true
+	orch := newOrch(t, cfg)
+	// Section 1 loads (index is non-empty, so the all-empty guard passes) but
+	// section 2 returns 500. The run must abort rather than remap against the
+	// partial index.
+	if orch.Run(context.Background()) {
+		t.Error("Run() = true, want false when a Plex section fetch failed (partial index must not be trusted)")
+	}
+}
+
+// TestFindStaleKeys_PlexErrorAborts pins FIX 6's fail-closed behavior at the
+// FindStaleKeys layer: when a Plex existence check returns an error (a real
+// outage, not a 404), FindStaleKeys returns that error and marks nothing
+// stale, so the caller aborts instead of treating undetermined items as stale.
+func TestFindStaleKeys_PlexErrorAborts(t *testing.T) {
+	cfg := testServer(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	})
+	orch := newOrch(t, cfg)
+	items := map[string]remap.TautulliEntry{
+		"1": {RatingKey: "1", Title: "A", MediaType: remap.Movie},
+	}
+	stale, err := orch.FindStaleKeys(context.Background(), items)
+	if err == nil {
+		t.Error("expected non-nil error when Plex returns 500 during the stale-key check")
+	}
+	if len(stale) != 0 {
+		t.Errorf("expected no items marked stale on error, got %d", len(stale))
+	}
+}
+
+// TestRun_AbortsWhenPlexCheckErrors pins FIX 6 end-to-end: a persistent Plex
+// error during the stale-key check aborts the run (Run returns false) rather
+// than treating the unverifiable item as stale and remapping it.
+func TestRun_AbortsWhenPlexCheckErrors(t *testing.T) {
+	cfg := testServer(t, func(w http.ResponseWriter, r *http.Request) {
+		cmd := r.URL.Query().Get("cmd")
+		switch {
+		case cmd == "get_history":
+			w.Write([]byte(`{"response":{"result":"success","data":{
+				"recordsFiltered":1,
+				"data":[{"rating_key":100,"title":"Movie","year":2020,"media_type":"movie","guid":"imdb://tt1111111"}]
+			}}}`))
+		case strings.Contains(r.URL.Path, "/library/metadata/"):
+			w.WriteHeader(http.StatusInternalServerError)
+		case strings.HasSuffix(r.URL.Path, "/library/sections"):
+			w.Write([]byte(`{"MediaContainer":{"Directory":[{"key":"1","title":"Movies","type":"movie"}]}}`))
+		case strings.Contains(r.URL.Path, "/sections/1/all"):
+			w.Write([]byte(`{"MediaContainer":{"Metadata":[
+				{"title":"Movie","ratingKey":"200","year":2020,
+				 "guid":"plex://movie/x","Guid":[{"id":"imdb://tt1111111"}]}
+			]}}`))
+		default:
+			w.Write([]byte(`{}`))
+		}
+	})
+	cfg.DryRun = true
+	orch := newOrch(t, cfg)
+	if orch.Run(context.Background()) {
+		t.Error("Run() = true, want false when Plex returns errors during the stale-key check")
+	}
+}
+
+// TestRun_BreakerTripAfterSuccessReturnsFalse pins FIX 3: when the consecutive-
+// failure circuit breaker trips DURING the remap phase, the run fails even
+// though at least one update already landed (updated > 0). The first remap
+// succeeds, then maxConsecutiveFailures (10) consecutive failures trip it.
+func TestRun_BreakerTripAfterSuccessReturnsFalse(t *testing.T) {
+	const n = 12
+	var updateCalls atomic.Int64
+	cfg := testServer(t, func(w http.ResponseWriter, r *http.Request) {
+		cmd := r.URL.Query().Get("cmd")
+		switch {
+		case cmd == "get_history":
+			var sb strings.Builder
+			sb.WriteString(`{"response":{"result":"success","data":{"recordsFiltered":12,"data":[`)
+			for i := range n {
+				if i > 0 {
+					sb.WriteByte(',')
+				}
+				fmt.Fprintf(&sb, `{"rating_key":%d,"title":"Movie %d","year":2020,"media_type":"movie","guid":"imdb://tt%d"}`, 100+i, i, 1000+i)
+			}
+			sb.WriteString(`]}}}`)
+			w.Write([]byte(sb.String()))
+		case cmd == "update_metadata_details":
+			// First update succeeds; every subsequent one fails, tripping the
+			// breaker only after the success has been counted (updated > 0).
+			if updateCalls.Add(1) == 1 {
+				w.Write([]byte(`{"response":{"result":"success"}}`))
+			} else {
+				w.WriteHeader(http.StatusInternalServerError)
+			}
+		case cmd == "delete_recently_added":
+			w.Write([]byte(`{"response":{"result":"success"}}`))
+		case strings.Contains(r.URL.Path, "/library/metadata/"):
+			w.WriteHeader(http.StatusNotFound) // every item is stale
+		case strings.HasSuffix(r.URL.Path, "/library/sections"):
+			w.Write([]byte(`{"MediaContainer":{"Directory":[{"key":"1","title":"Movies","type":"movie"}]}}`))
+		case strings.Contains(r.URL.Path, "/sections/1/all"):
+			var sb strings.Builder
+			sb.WriteString(`{"MediaContainer":{"Metadata":[`)
+			for i := range n {
+				if i > 0 {
+					sb.WriteByte(',')
+				}
+				fmt.Fprintf(&sb, `{"title":"Movie %d","ratingKey":"%d","year":2020,"guid":"plex://movie/x%d","Guid":[{"id":"imdb://tt%d"}]}`, i, 200+i, i, 1000+i)
+			}
+			sb.WriteString(`]}}`)
+			w.Write([]byte(sb.String()))
+		default:
+			w.Write([]byte(`{}`))
+		}
+	})
+	cfg.DryRun = false
+	orch := newOrch(t, cfg)
+	if orch.Run(context.Background()) {
+		t.Error("Run() = true, want false when the circuit breaker tripped (even though >=1 update succeeded before the trip)")
+	}
+	if got := updateCalls.Load(); got < 11 {
+		t.Errorf("update calls = %d, want >= 11 (1 success + 10 consecutive failures to trip the breaker)", got)
+	}
+}
+
+// TestRunScheduler_ShutdownInterruptedRunNotCountedAsFailure verifies that when
+// a scheduled run is interrupted by context cancellation (graceful shutdown),
+// RunScheduler treats it as a shutdown rather than a failure: it does not log a
+// run failure, does not count the run toward the consecutive-failure damping
+// threshold, and does not flip the health marker to unhealthy.
+func TestRunScheduler_ShutdownInterruptedRunNotCountedAsFailure(t *testing.T) {
+	var buf strings.Builder
+	orig := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, nil)))
+	t.Cleanup(func() { slog.SetDefault(orig) })
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	var falseCount int
+	setHealthy := func(healthy bool) {
+		if !healthy {
+			falseCount++
+		}
+	}
+
+	o := New(&fakePlex{}, &fakeTautulli{}, &config.Config{DryRun: true, ScheduleInterval: time.Hour})
+	o.RunScheduler(ctx, setHealthy)
+
+	out := buf.String()
+	if strings.Contains(out, "run failed") {
+		t.Errorf("shutdown-interrupted run logged a failure; want none. log:\n%s", out)
+	}
+	if falseCount != 0 {
+		t.Errorf("setHealthy(false) called %d times; a shutdown-interrupted run must not flip the marker unhealthy", falseCount)
+	}
+}
+
+// TestRun_CancelledContextReturnsFalse verifies that a run interrupted by
+// graceful shutdown reports failure rather than false success: with an
+// already-cancelled context, Run returns false even though history collection
+// itself succeeded, so a cancelled run never reports a successful pass.
+func TestRun_CancelledContextReturnsFalse(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	o := New(&fakePlex{}, &fakeTautulli{}, &config.Config{DryRun: true})
+	o.PaginationDelay = time.Millisecond
+	if o.Run(ctx) {
+		t.Error("Run() = true, want false when the context is cancelled (a shutdown-interrupted run must not report success)")
+	}
+}
+
+func TestRun_PartialRemapFailureStillSucceeds(t *testing.T) {
+	var updates atomic.Int64
+	cfg := testServer(t, func(w http.ResponseWriter, r *http.Request) {
+		cmd := r.URL.Query().Get("cmd")
+		switch {
+		case cmd == "get_history":
+			w.Write([]byte(`{"response":{"result":"success","data":{
+				"recordsFiltered":2,
+				"data":[
+					{"rating_key":100,"title":"Movie A","year":2020,"media_type":"movie","guid":"imdb://tt1000001"},
+					{"rating_key":101,"title":"Movie B","year":2021,"media_type":"movie","guid":"imdb://tt1000002"}
+				]
+			}}}`))
+		case cmd == "update_metadata_details":
+			// First update lands, second fails: one failure is far below the
+			// 10-failure breaker threshold, so the run still makes progress.
+			if updates.Add(1) == 1 {
+				w.Write([]byte(`{"response":{"result":"success"}}`))
+			} else {
+				w.WriteHeader(http.StatusInternalServerError)
+			}
+		case cmd == "delete_recently_added":
+			w.Write([]byte(`{"response":{"result":"success"}}`))
+		case strings.Contains(r.URL.Path, "/library/metadata/"):
+			w.WriteHeader(http.StatusNotFound) // both items are stale
+		case strings.HasSuffix(r.URL.Path, "/library/sections"):
+			w.Write([]byte(`{"MediaContainer":{"Directory":[{"key":"1","title":"Movies","type":"movie"}]}}`))
+		case strings.Contains(r.URL.Path, "/sections/1/all"):
+			w.Write([]byte(`{"MediaContainer":{"Metadata":[
+				{"title":"Movie A","ratingKey":"200","year":2020,"guid":"plex://movie/a","Guid":[{"id":"imdb://tt1000001"}]},
+				{"title":"Movie B","ratingKey":"201","year":2021,"guid":"plex://movie/b","Guid":[{"id":"imdb://tt1000002"}]}
+			]}}`))
+		default:
+			w.Write([]byte(`{}`))
+		}
+	})
+	cfg.DryRun = false
+	orch := newOrch(t, cfg)
+	if !orch.Run(context.Background()) {
+		t.Error("Run() = false, want true: a partial remap (one update landed, one failed, breaker not tripped) made progress and must not flap the health marker")
+	}
+}
+
+// scriptedScheduler drives RunScheduler deterministically. Each GetHistory call
+// consumes the next entry of failPlan (true = the run fails, false = it
+// succeeds); once the plan is exhausted it cancels the scheduler so RunScheduler
+// returns instead of ticking forever. Failure counting is driven by the plan,
+// not by wall-clock timing, so the assertions are deterministic.
+type scriptedScheduler struct {
+	fakeTautulli
+	failPlan []bool
+	next     int
+	cancel   context.CancelFunc
+}
+
+func (f *scriptedScheduler) GetHistory(_ context.Context, _ url.Values) (*tautulli.HistoryPage, error) {
+	i := f.next
+	f.next++
+	if i >= len(f.failPlan) {
+		f.cancel()
+		return nil, fmt.Errorf("scheduler stop after %d calls", i)
+	}
+	if f.failPlan[i] {
+		return nil, fmt.Errorf("simulated tautulli failure on call %d", i)
+	}
+	return &tautulli.HistoryPage{}, nil
+}
+
+func TestRunScheduler_FlipsUnhealthyAfterConsecutiveFailures(t *testing.T) {
+	var buf strings.Builder
+	orig := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, nil)))
+	t.Cleanup(func() { slog.SetDefault(orig) })
+
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	ft := &scriptedScheduler{failPlan: []bool{true, true, true}, cancel: cancel}
+	o := New(&fakePlex{}, ft, &config.Config{DryRun: true, ScheduleInterval: time.Millisecond})
+
+	trueCount, falseCount := 0, 0
+	setHealthy := func(healthy bool) {
+		if healthy {
+			trueCount++
+		} else {
+			falseCount++
+		}
+	}
+
+	o.RunScheduler(ctx, setHealthy)
+
+	out := buf.String()
+	if falseCount != 1 {
+		t.Errorf("setHealthy(false) called %d times, want 1 (flip once after 3 consecutive failures); log:\n%s", falseCount, out)
+	}
+	if trueCount < 1 {
+		t.Errorf("setHealthy(true) called %d times, want >=1 (initial mark healthy)", trueCount)
+	}
+	if !strings.Contains(out, "consecutive_failures=3") {
+		t.Errorf("expected a 'run failed' log at consecutive_failures=3; log:\n%s", out)
+	}
+}
+
+func TestRunScheduler_ResetsFailureCountOnSuccess(t *testing.T) {
+	var buf strings.Builder
+	orig := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, nil)))
+	t.Cleanup(func() { slog.SetDefault(orig) })
+
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	// fail, fail, succeed (resets the counter to 0), fail: the counter never
+	// reaches the threshold of 3, so the marker must never flip unhealthy.
+	ft := &scriptedScheduler{failPlan: []bool{true, true, false, true}, cancel: cancel}
+	o := New(&fakePlex{}, ft, &config.Config{DryRun: true, ScheduleInterval: time.Millisecond})
+
+	falseCount := 0
+	setHealthy := func(healthy bool) {
+		if !healthy {
+			falseCount++
+		}
+	}
+
+	o.RunScheduler(ctx, setHealthy)
+
+	out := buf.String()
+	if falseCount != 0 {
+		t.Errorf("setHealthy(false) called %d times, want 0 (a success between failures resets the counter below the threshold); log:\n%s", falseCount, out)
+	}
+	if !strings.Contains(out, "run complete") {
+		t.Errorf("expected a 'run complete' log from the successful run; log:\n%s", out)
+	}
+}
+
+func TestRun_ShutdownDuringRemapReturnsFalse(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cfg := testServer(t, func(w http.ResponseWriter, r *http.Request) {
+		cmd := r.URL.Query().Get("cmd")
+		switch {
+		case cmd == "get_history":
+			w.Write([]byte(`{"response":{"result":"success","data":{
+				"recordsFiltered":1,
+				"data":[{"rating_key":100,"title":"Stale Movie","year":2020,"media_type":"movie","guid":"imdb://tt1111111"}]
+			}}}`))
+		case cmd == "update_metadata_details":
+			cancel()
+			w.Write([]byte(`{"response":{"result":"success"}}`))
+		case strings.HasSuffix(r.URL.Path, "/library/metadata/100"):
+			w.WriteHeader(http.StatusNotFound)
+		case strings.HasSuffix(r.URL.Path, "/library/sections"):
+			w.Write([]byte(`{"MediaContainer":{"Directory":[{"key":"1","title":"Movies","type":"movie"}]}}`))
+		case strings.Contains(r.URL.Path, "/sections/1/all"):
+			w.Write([]byte(`{"MediaContainer":{"Metadata":[
+				{"title":"Stale Movie","ratingKey":"200","year":2020,
+				 "guid":"plex://movie/x","Guid":[{"id":"imdb://tt1111111"}]}
+			]}}`))
+		default:
+			w.Write([]byte(`{}`))
+		}
+	})
+	cfg.DryRun = false
+	orch := newOrch(t, cfg)
+	if orch.Run(ctx) {
+		t.Error("Run() = true, want false when shutdown cancels the context during the remap phase (a cancelled run must not report success even if an update landed before the signal)")
+	}
+}
+
+// shutdownOnUpdateTautulli cancels the run context on the first UpdateMetadata
+// call and returns an error, simulating graceful shutdown arriving mid-remap.
+type shutdownOnUpdateTautulli struct {
+	fakeTautulli
+	cancel context.CancelFunc
+}
+
+func (f *shutdownOnUpdateTautulli) UpdateMetadata(_ context.Context, _, _ string, _ remap.MediaType) error {
+	f.cancel()
+	return context.Canceled
+}
+
+func TestApplyRemappings_ShutdownDuringUpdateIsNotAFailure(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	o := New(&fakePlex{}, &shutdownOnUpdateTautulli{cancel: cancel}, &config.Config{DryRun: false})
+	matched := []remap.MatchResult{
+		{Title: "A", OldKey: "1", NewKey: "2", MediaType: remap.Movie, Method: remap.MethodGUID},
+		{Title: "B", OldKey: "3", NewKey: "4", MediaType: remap.Movie, Method: remap.MethodGUID},
+	}
+	updated, failed, aborted := o.ApplyRemappings(ctx, matched, nil)
+	if updated != 0 {
+		t.Errorf("updated = %d, want 0 (the update was interrupted by shutdown, not completed)", updated)
+	}
+	if failed != 0 {
+		t.Errorf("failed = %d, want 0 (a shutdown-interrupted update is not a remap failure and must not count toward the consecutive-failure breaker)", failed)
+	}
+	if aborted {
+		t.Error("aborted = true, want false (a shutdown breaks the loop cleanly; it does not trip the breaker)")
+	}
+}
+
+func TestRun_DryRunWithMatch_PreviewsClear(t *testing.T) {
+	var buf strings.Builder
+	orig := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, nil)))
+	t.Cleanup(func() { slog.SetDefault(orig) })
+
+	cfg := testServer(t, func(w http.ResponseWriter, r *http.Request) {
+		cmd := r.URL.Query().Get("cmd")
+		switch {
+		case cmd == "get_history":
+			w.Write([]byte(`{"response":{"result":"success","data":{
+				"recordsFiltered":1,
+				"data":[{"rating_key":100,"title":"Stale Movie","year":2020,"media_type":"movie","guid":"imdb://tt1111111"}]
+			}}}`))
+		case strings.HasSuffix(r.URL.Path, "/library/metadata/100"):
+			w.WriteHeader(http.StatusNotFound)
+		case strings.HasSuffix(r.URL.Path, "/library/sections"):
+			w.Write([]byte(`{"MediaContainer":{"Directory":[{"key":"1","title":"Movies","type":"movie"}]}}`))
+		case strings.Contains(r.URL.Path, "/sections/1/all"):
+			w.Write([]byte(`{"MediaContainer":{"Metadata":[
+				{"title":"Stale Movie","ratingKey":"200","year":2020,
+				 "guid":"plex://movie/x","Guid":[{"id":"imdb://tt1111111"}]}
+			]}}`))
+		default:
+			w.Write([]byte(`{}`))
+		}
+	})
+	cfg.DryRun = true
+	orch := newOrch(t, cfg)
+	if !orch.Run(context.Background()) {
+		t.Fatal("Run() = false, want true (a dry-run with a successful match is a successful pass)")
+	}
+	out := buf.String()
+	if !strings.Contains(out, "would clear recently added") {
+		t.Errorf("dry-run with a match must PREVIEW the recently-added clear so the preview does not hide a mutation the live run performs; log lacked the preview line:\n%s", out)
+	}
+	if strings.Contains(out, "skipping clear recently added") {
+		t.Errorf("dry-run with a match must not take the no-updates skip branch; log:\n%s", out)
 	}
 }
