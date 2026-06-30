@@ -436,3 +436,58 @@ func TestBuildPlexIndex_CrossSectionGUIDCollisionRefusesToMatch(t *testing.T) {
 		t.Errorf("byGUID[imdb://tt0113277] = %q, want ABSENT (cross-section GUID collision must refuse-to-match under concurrency)", byGUID["imdb://tt0113277"].RatingKey)
 	}
 }
+
+func TestBuildPlexIndex_AnnouncesRefusalSummaryWhenKeysAreAmbiguous(t *testing.T) {
+	// Two same-type items share a title and year (with distinct GUIDs), so the
+	// title+year and title slots are pruned as ambiguous. BuildPlexIndex must
+	// emit the operator-facing summary naming that it refused ambiguous keys,
+	// so an operator can see why those items will not be remapped. The summary
+	// is distinct from the per-collision shadow lines and is the only signal
+	// that surfaces the aggregate refusal counts.
+	fetcher := &collidingFetcher{
+		sections: []Section{{Key: "1", Title: "Movies", Type: "movie"}},
+		items: map[string][]LibItem{
+			"1": {
+				{RatingKey: 1, Title: "Heat", Year: 1995, GUIDs: []string{"imdb://tt0001"}},
+				{RatingKey: 2, Title: "Heat", Year: 1995, GUIDs: []string{"imdb://tt0002"}},
+			},
+		},
+	}
+
+	var buf bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug})))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+
+	BuildPlexIndex(context.Background(), fetcher, 1)
+
+	if !strings.Contains(buf.String(), "refused to match ambiguous index keys") {
+		t.Errorf("expected the ambiguity-refusal summary to be logged when keys are pruned, got:\n%s", buf.String())
+	}
+}
+
+func TestBuildPlexIndex_OmitsRefusalSummaryWhenNoKeysAreAmbiguous(t *testing.T) {
+	// A library with no colliding keys prunes nothing, so the operator-facing
+	// ambiguity-refusal summary must stay silent: the operator is told about
+	// refused keys only when there actually are some, not on every clean run.
+	fetcher := &collidingFetcher{
+		sections: []Section{{Key: "1", Title: "Movies", Type: "movie"}},
+		items: map[string][]LibItem{
+			"1": {
+				{RatingKey: 1, Title: "Heat", Year: 1995, GUIDs: []string{"imdb://tt0001"}},
+				{RatingKey: 2, Title: "Speed", Year: 1994, GUIDs: []string{"imdb://tt0002"}},
+			},
+		},
+	}
+
+	var buf bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug})))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+
+	BuildPlexIndex(context.Background(), fetcher, 1)
+
+	if strings.Contains(buf.String(), "refused to match ambiguous index keys") {
+		t.Errorf("did not expect the ambiguity-refusal summary for a collision-free index, got:\n%s", buf.String())
+	}
+}
