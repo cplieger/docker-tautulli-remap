@@ -1,6 +1,6 @@
 # tautulli-remap
 
-[![Image Size](https://ghcr-badge.egpl.dev/cplieger/tautulli-remap/size)](https://github.com/cplieger/tautulli-remap/pkgs/container/tautulli-remap)
+[![Image Size](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/cplieger/tautulli-remap/badges/size.json)](https://github.com/cplieger/tautulli-remap/pkgs/container/tautulli-remap)
 ![Platforms](https://img.shields.io/badge/platforms-amd64%20%7C%20arm64-blue)
 ![base: Distroless](https://img.shields.io/badge/base-Distroless_nonroot-4285F4?logo=google)
 [![Go Report Card](https://goreportcard.com/badge/github.com/cplieger/tautulli-remap)](https://goreportcard.com/report/github.com/cplieger/tautulli-remap)
