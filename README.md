@@ -98,7 +98,10 @@ This keeps the container healthy (passing healthchecks) while delegating schedul
 
 ## Healthcheck
 
-The container includes a built-in Docker healthcheck via the `/tautulli-remap health` subcommand. After each scheduled run, the main process creates or removes a marker file at `/tmp/.healthy`; the health subcommand checks for this file's existence. The container reports unhealthy when Tautulli or Plex APIs are unreachable, return errors, or the remap logic fails — it recovers automatically on the next successful run (including runs where nothing needs remapping).
+The container includes a built-in Docker healthcheck via the `/tautulli-remap health` subcommand, which checks for a marker file at `/tmp/.healthy`. What that marker reflects depends on the run mode:
+
+- **Scheduled mode** (`SCHEDULE_INTERVAL` set to a duration): the main process refreshes `/tmp/.healthy` after each run and marks the container unhealthy after 3 consecutive failed runs (Tautulli or Plex APIs unreachable, returning errors, or the remap logic failing), recovering automatically on the next successful run (including runs where nothing needs remapping).
+- **Resident-idle mode** (`SCHEDULE_INTERVAL=off`): the marker reflects the resident process's liveness. Each `tautulli-remap trigger` run reports its own outcome via its exit code (0 success / 1 failure) for the external scheduler to act on; a failed trigger deliberately does **not** mark the long-lived container unhealthy.
 
 ## Security
 

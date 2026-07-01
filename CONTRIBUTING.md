@@ -110,7 +110,7 @@ enough to catch formatting drift; `golangci-lint fmt` fixes it.
 - **Structured logging is key-value only.** `sloglint` runs with `kv-only`,
   so every `slog` call must use `slog.Info("msg", "key", val)` form — no
   attribute helpers. Match the existing log shape.
-- **Lint is strict.** `gocyclo` trips at complexity 18; `gosec`, `gocritic`,
+- **Lint is strict.** `gocyclo` trips at complexity 15; `gosec`, `gocritic`,
   `revive`, and friends are enabled. `gofumpt` runs with `extra-rules`
   (grouped same-type params, no naked returns).
 - **Rating keys are validated before URL interpolation.** They must be numeric
