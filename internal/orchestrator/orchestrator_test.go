@@ -120,6 +120,24 @@ func TestCollectTautulliItems_SinglePage(t *testing.T) {
 	}
 }
 
+func TestCollectTautulliItems_CapturesEpisodeGUID(t *testing.T) {
+	cfg := testServer(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.Write([]byte(`{"response":{"result":"success","data":{"recordsFiltered":1,"data":[{"rating_key":99,"grandparent_rating_key":50,"title":"Ep 1","grandparent_title":"Show B","year":2021,"media_type":"episode","guid":"plex://episode/5d9c081be98e47001eb0d74f"}]}}}`))
+	})
+	orch := newOrch(t, cfg)
+	items, captured := orch.CollectTautulliItems(context.Background())
+	if items == nil {
+		t.Fatal("expected non-nil items")
+	}
+	if captured != 1 {
+		t.Errorf("episodeGUIDsCaptured = %d, want 1 (one plex://episode/ GUID retained for later show resolution)", captured)
+	}
+	guids := items["50"].EpisodeGUIDs
+	if len(guids) != 1 || guids[0] != "plex://episode/5d9c081be98e47001eb0d74f" {
+		t.Errorf("items[50].EpisodeGUIDs = %v, want [plex://episode/5d9c081be98e47001eb0d74f]", guids)
+	}
+}
+
 func TestCollectTautulliItems_MultiPage(t *testing.T) {
 	calls := 0
 	cfg := testServer(t, func(w http.ResponseWriter, r *http.Request) {
@@ -1349,5 +1367,49 @@ func TestResolveOneShow_TriesUntilResolvedToleratingErrors(t *testing.T) {
 	}
 	if calls != 3 {
 		t.Errorf("resolve calls = %d, want 3 (each tried until the hit)", calls)
+	}
+}
+
+func TestCircuitBreaker_record(t *testing.T) {
+	tests := []struct {
+		name      string
+		threshold int
+		sequence  []bool
+		wantTrip  []bool
+	}{
+		{
+			name:      "trips exactly at the threshold of consecutive failures",
+			threshold: 3,
+			sequence:  []bool{false, false, false},
+			wantTrip:  []bool{false, false, true},
+		},
+		{
+			name:      "a success resets the consecutive count so a following failure run restarts from zero",
+			threshold: 3,
+			sequence:  []bool{false, false, true, false, false},
+			wantTrip:  []bool{false, false, false, false, false},
+		},
+		{
+			name:      "successes before any failure keep the breaker closed",
+			threshold: 2,
+			sequence:  []bool{true, true, true},
+			wantTrip:  []bool{false, false, false},
+		},
+		{
+			name:      "the breaker trips again after a reset once the threshold is reached anew",
+			threshold: 2,
+			sequence:  []bool{false, true, false, false},
+			wantTrip:  []bool{false, false, false, true},
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			cb := newCircuitBreaker(tc.threshold)
+			for i, ok := range tc.sequence {
+				if got := cb.record(ok); got != tc.wantTrip[i] {
+					t.Errorf("step %d: record(%v) = %v, want %v", i, ok, got, tc.wantTrip[i])
+				}
+			}
+		})
 	}
 }

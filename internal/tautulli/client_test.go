@@ -469,3 +469,108 @@ func TestUpdateMetadata_MalformedBodyReturnsParseError(t *testing.T) {
 		t.Errorf("error = %v, want it wrapped with \"parsing update_metadata_details\"", err)
 	}
 }
+
+// TestUpdateMetadata_APIErrorPropagates asserts that a transport/HTTP-status
+// failure on the live write surfaces to the caller instead of being swallowed.
+// UpdateMetadata mutates Tautulli's DB, so a failed write reported as success
+// would leave history broken while telling the operator everything is fine.
+func TestUpdateMetadata_APIErrorPropagates(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer srv.Close()
+
+	c := newTestClient(srv.URL, "k", srv.Client())
+	err := c.UpdateMetadata(context.Background(), "100", "200", remap.Movie)
+	if err == nil {
+		t.Fatal("expected UpdateMetadata to surface the transport error from a failed live write")
+	}
+	if !strings.Contains(err.Error(), "HTTP 500") {
+		t.Errorf("error = %v, want the API-layer HTTP 500 error (swallowing it would fall through to checkResult and report a parse error instead)", err)
+	}
+}
+
+// TestGetHistory_APIWithRetryErrorPropagates asserts that when the retrying
+// read exhausts (Tautulli unavailable), GetHistory surfaces that error so the
+// pipeline treats Tautulli as down rather than proceeding on an empty page.
+func TestGetHistory_APIWithRetryErrorPropagates(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer srv.Close()
+
+	c := newTestClient(srv.URL, "k", srv.Client())
+	_, err := c.GetHistory(context.Background(), nil)
+	if err == nil {
+		t.Fatal("expected GetHistory to surface the retry-exhausted error")
+	}
+	if strings.Contains(err.Error(), "parsing history") {
+		t.Errorf("error = %v, want the propagated APIWithRetry error, not a parse error (swallowing it would fall through to json.Unmarshal of a nil body)", err)
+	}
+}
+
+// TestDeleteRecentlyAdded_APIErrorPropagates asserts that a transport/HTTP
+// failure surfaces to the caller instead of being swallowed as success.
+func TestDeleteRecentlyAdded_APIErrorPropagates(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer srv.Close()
+
+	c := newTestClient(srv.URL, "k", srv.Client())
+	err := c.DeleteRecentlyAdded(context.Background())
+	if err == nil {
+		t.Fatal("expected DeleteRecentlyAdded to surface the transport error")
+	}
+	if !strings.Contains(err.Error(), "HTTP 500") {
+		t.Errorf("error = %v, want the API-layer HTTP 500 error (swallowing it would fall through to checkResult and report a parse error instead)", err)
+	}
+}
+
+// TestGetHistory_UnknownMediaTypeRowSkipped guards the fail-open wire boundary:
+// a get_history page carrying a row with an unexpected media_type ("track")
+// alongside valid movie/episode rows must decode WITHOUT error, and the
+// unknown-type row is skipped by ProcessHistoryRow while the valid rows are
+// processed. media_type decodes as a plain string, so the strict
+// MediaType.UnmarshalText no longer runs at the wire boundary; previously it
+// failed the entire json.Unmarshal on the first unknown row, aborting
+// pagination and silently zeroing out the whole remap run.
+func TestGetHistory_UnknownMediaTypeRowSkipped(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Write([]byte(`{"response":{"result":"success","data":{
+			"recordsFiltered":3,
+			"data":[
+				{"rating_key":42,"title":"Movie","year":2020,"media_type":"movie","guid":"imdb://tt1234567"},
+				{"rating_key":99,"grandparent_rating_key":50,"title":"Ep","grandparent_title":"Show","year":2021,"media_type":"episode","guid":"tvdb://271557"},
+				{"rating_key":7,"title":"Song","year":2019,"media_type":"track","guid":""}
+			]
+		}}}`))
+	}))
+	defer srv.Close()
+
+	c := newTestClient(srv.URL, "k", srv.Client())
+	page, err := c.GetHistory(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("GetHistory errored on a page containing an unknown media_type: %v", err)
+	}
+	if len(page.Rows) != 3 {
+		t.Fatalf("decoded rows = %d, want 3 (the unknown-type row must still decode)", len(page.Rows))
+	}
+
+	items := map[string]remap.TautulliEntry{}
+	for i := range page.Rows {
+		remap.ProcessHistoryRow(&page.Rows[i], items)
+	}
+	if len(items) != 2 {
+		t.Fatalf("processed items = %d, want 2 (movie + show; the track row is skipped)", len(items))
+	}
+	if items["42"].MediaType != remap.Movie {
+		t.Errorf("movie row not processed: items[42] = %+v", items["42"])
+	}
+	if items["50"].MediaType != remap.Show {
+		t.Errorf("episode row not processed into its show: items[50] = %+v", items["50"])
+	}
+	if _, ok := items["7"]; ok {
+		t.Errorf("track row should have been skipped, but items[7] exists: %+v", items["7"])
+	}
+}

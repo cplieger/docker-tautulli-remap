@@ -365,3 +365,72 @@ func TestLogConfig_logsConfigAttributes(t *testing.T) {
 		})
 	}
 }
+
+// TestLoad_scheduleIntervalDefaultsToResidentIdle pins the getEnv("SCHEDULE_INTERVAL", "off")
+// fallback: with the env var unset, Load must default to resident-idle mode
+// (ScheduleInterval == 0), not scheduled mode. TestLoadDefaults asserts every
+// other default but omits this one, leaving a mutation of the "off" fallback to
+// any parseable duration undetected.
+func TestLoad_scheduleIntervalDefaultsToResidentIdle(t *testing.T) {
+	t.Setenv("TAUTULLI_APIKEY", "key")
+	t.Setenv("PLEX_TOKEN", "token")
+	t.Setenv("SCHEDULE_INTERVAL", "")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+	if cfg.ScheduleInterval != 0 {
+		t.Errorf("ScheduleInterval = %v, want 0 (resident-idle default)", cfg.ScheduleInterval)
+	}
+}
+
+// TestLoad_whitespaceOnlySecretWarnsButProceeds pins the branch that separates a
+// missing required secret (empty value -> MissingEnvError) from a present-but-blank
+// one (whitespace-only -> loaded verbatim, with a warning). A whitespace-only
+// TAUTULLI_APIKEY or PLEX_TOKEN must NOT fail Load; Load returns the value
+// unchanged and emits the "contains only whitespace" warning naming that key. A
+// non-blank secret must load without the warning. This guards each
+// strings.TrimSpace(x) == "" check against a negation mutation, which would warn
+// on every real secret and stay silent on the blank ones.
+func TestLoad_whitespaceOnlySecretWarnsButProceeds(t *testing.T) {
+	tests := []struct {
+		name          string
+		apiKey        string
+		token         string
+		wantAPIWarn   bool
+		wantTokenWarn bool
+	}{
+		{"non-blank secrets warn on neither", "real-key", "real-token", false, false},
+		{"whitespace api key warns on tautulli only", "   ", "real-token", true, false},
+		{"tab-only plex token warns on plex only", "real-key", "\t", false, true},
+		{"both blank warn on both", " ", "  ", true, true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			getLogs := captureLogs(t)
+			t.Setenv("TAUTULLI_APIKEY", tt.apiKey)
+			t.Setenv("PLEX_TOKEN", tt.token)
+
+			cfg, err := Load()
+			if err != nil {
+				t.Fatalf("Load() error = %v, want nil (a whitespace-only secret must not fail Load)", err)
+			}
+			if cfg.TautulliAPIKey != tt.apiKey {
+				t.Errorf("TautulliAPIKey = %q, want %q loaded verbatim", cfg.TautulliAPIKey, tt.apiKey)
+			}
+			if cfg.PlexToken != tt.token {
+				t.Errorf("PlexToken = %q, want %q loaded verbatim", cfg.PlexToken, tt.token)
+			}
+			logs := getLogs()
+			gotAPIWarn := strings.Contains(logs, "only whitespace") && strings.Contains(logs, "key=TAUTULLI_APIKEY")
+			if gotAPIWarn != tt.wantAPIWarn {
+				t.Errorf("TAUTULLI_APIKEY whitespace warning = %v, want %v; logs=%q", gotAPIWarn, tt.wantAPIWarn, logs)
+			}
+			gotTokenWarn := strings.Contains(logs, "only whitespace") && strings.Contains(logs, "key=PLEX_TOKEN")
+			if gotTokenWarn != tt.wantTokenWarn {
+				t.Errorf("PLEX_TOKEN whitespace warning = %v, want %v; logs=%q", gotTokenWarn, tt.wantTokenWarn, logs)
+			}
+		})
+	}
+}
