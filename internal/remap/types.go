@@ -153,13 +153,18 @@ type UnmatchResult struct {
 
 // HistoryItem represents a single row from Tautulli's get_history response.
 type HistoryItem struct {
-	Title                string    `json:"title"`
-	GrandparentTitle     string    `json:"grandparent_title"`
-	GUID                 string    `json:"guid"`
-	MediaType            MediaType `json:"media_type"`
-	RatingKey            FlexInt   `json:"rating_key"`
-	Year                 FlexInt   `json:"year"`
-	GrandparentRatingKey FlexInt   `json:"grandparent_rating_key"`
+	Title            string `json:"title"`
+	GrandparentTitle string `json:"grandparent_title"`
+	GUID             string `json:"guid"`
+	// MediaType is decoded as a plain string rather than the MediaType type so a
+	// row with an unexpected value (music "track", "clip", live TV, or a future
+	// type) does not fail the whole page decode through MediaType's strict
+	// UnmarshalText. ProcessHistoryRow validates it via ParseMediaType and skips
+	// unknown types, keeping the wire boundary as fail-open as the processing.
+	MediaType            string  `json:"media_type"`
+	RatingKey            FlexInt `json:"rating_key"`
+	Year                 FlexInt `json:"year"`
+	GrandparentRatingKey FlexInt `json:"grandparent_rating_key"`
 }
 
 // GUIDMapping maps a source prefix to its canonical scheme.

@@ -159,7 +159,7 @@ func ProcessHistoryRow(row *HistoryItem, items map[string]TautulliEntry) bool {
 	year := strconv.Itoa(int(row.Year))
 	guid := NormalizeGUID(row.GUID)
 
-	switch row.MediaType {
+	switch ParseMediaType(row.MediaType) {
 	case Movie:
 		ratingKey := int(row.RatingKey)
 		if ratingKey <= 0 {
@@ -184,7 +184,7 @@ func ProcessHistoryRow(row *HistoryItem, items map[string]TautulliEntry) bool {
 		// normalizes to a show-level id (tvdb://<id>) and serves as the show
 		// GUID directly, matching the existing GUID index.
 		var episodeGUID, showGUID string
-		if strings.Contains(guid, "plex://episode/") {
+		if strings.HasPrefix(guid, "plex://episode/") {
 			episodeGUID = guid
 		} else {
 			showGUID = guid
