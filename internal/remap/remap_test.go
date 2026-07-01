@@ -147,7 +147,7 @@ func TestProcessHistoryRow(t *testing.T) {
 		items := map[string]TautulliEntry{}
 		row := &HistoryItem{
 			RatingKey: 42, Title: "Test Movie",
-			Year: 2020, MediaType: Movie,
+			Year: 2020, MediaType: "movie",
 			GUID: "imdb://tt1234567",
 		}
 		ProcessHistoryRow(row, items)
@@ -163,7 +163,7 @@ func TestProcessHistoryRow(t *testing.T) {
 		items := map[string]TautulliEntry{}
 		row := &HistoryItem{
 			RatingKey: 0, Title: "Bad Movie",
-			Year: 2020, MediaType: Movie,
+			Year: 2020, MediaType: "movie",
 		}
 		ProcessHistoryRow(row, items)
 		if len(items) != 0 {
@@ -176,7 +176,7 @@ func TestProcessHistoryRow(t *testing.T) {
 		row := &HistoryItem{
 			RatingKey: 99, GrandparentRatingKey: 50,
 			Title: "Episode Title", GrandparentTitle: "Show Title",
-			Year: 2021, MediaType: Episode,
+			Year: 2021, MediaType: "episode",
 			GUID: "tvdb://271557",
 		}
 		ProcessHistoryRow(row, items)
@@ -196,7 +196,7 @@ func TestProcessHistoryRow(t *testing.T) {
 		items := map[string]TautulliEntry{}
 		row := &HistoryItem{
 			RatingKey: 99, GrandparentRatingKey: 0,
-			Title: "Episode", MediaType: Episode,
+			Title: "Episode", MediaType: "episode",
 		}
 		ProcessHistoryRow(row, items)
 		if len(items) != 0 {
@@ -209,7 +209,7 @@ func TestProcessHistoryRow(t *testing.T) {
 		row := &HistoryItem{
 			RatingKey: 99, GrandparentRatingKey: 50,
 			Title: "Ep", GrandparentTitle: "Show",
-			Year: 2021, MediaType: Episode,
+			Year: 2021, MediaType: "episode",
 			GUID: "plex://episode/5d9c135046115600200d30a2",
 		}
 		captured := ProcessHistoryRow(row, items)
@@ -232,7 +232,7 @@ func TestProcessHistoryRow(t *testing.T) {
 		mk := func(guid string) *HistoryItem {
 			return &HistoryItem{
 				RatingKey: 1, GrandparentRatingKey: 50, Title: "Ep",
-				GrandparentTitle: "Show", Year: 2021, MediaType: Episode, GUID: guid,
+				GrandparentTitle: "Show", Year: 2021, MediaType: "episode", GUID: guid,
 			}
 		}
 		ProcessHistoryRow(mk("plex://episode/aaa"), items)
@@ -249,7 +249,7 @@ func TestProcessHistoryRow(t *testing.T) {
 		for i := range maxEpisodeGUIDsPerShow + 3 {
 			row := &HistoryItem{
 				RatingKey: FlexInt(i + 1), GrandparentRatingKey: 50, Title: "Ep",
-				GrandparentTitle: "Show", Year: 2021, MediaType: Episode,
+				GrandparentTitle: "Show", Year: 2021, MediaType: "episode",
 				GUID: fmt.Sprintf("plex://episode/%d", i),
 			}
 			ProcessHistoryRow(row, items)
@@ -263,7 +263,7 @@ func TestProcessHistoryRow(t *testing.T) {
 		items := map[string]TautulliEntry{}
 		row := &HistoryItem{
 			RatingKey: 99, GrandparentRatingKey: 50, Title: "Ep",
-			GrandparentTitle: "Show", Year: 2021, MediaType: Episode,
+			GrandparentTitle: "Show", Year: 2021, MediaType: "episode",
 			GUID: "com.plexapp.agents.thetvdb://121361/6/1?lang=en",
 		}
 		if captured := ProcessHistoryRow(row, items); captured {
@@ -282,12 +282,12 @@ func TestProcessHistoryRow(t *testing.T) {
 		items := map[string]TautulliEntry{}
 		ProcessHistoryRow(&HistoryItem{
 			RatingKey: 1, GrandparentRatingKey: 50, Title: "Ep1",
-			GrandparentTitle: "Show", Year: 2021, MediaType: Episode,
+			GrandparentTitle: "Show", Year: 2021, MediaType: "episode",
 			GUID: "plex://episode/aaa",
 		}, items)
 		ProcessHistoryRow(&HistoryItem{
 			RatingKey: 2, GrandparentRatingKey: 50, Title: "Ep2",
-			GrandparentTitle: "Show", Year: 2021, MediaType: Episode,
+			GrandparentTitle: "Show", Year: 2021, MediaType: "episode",
 			GUID: "thetvdb://121361/6/2",
 		}, items)
 		entry := items["50"]
@@ -304,7 +304,7 @@ func TestProcessHistoryRow(t *testing.T) {
 		row := &HistoryItem{
 			RatingKey: 99, GrandparentRatingKey: 50,
 			Title: "Fallback Title", GrandparentTitle: "",
-			Year: 2021, MediaType: Episode,
+			Year: 2021, MediaType: "episode",
 		}
 		ProcessHistoryRow(row, items)
 		if items["50"].Title != "Fallback Title" {
@@ -318,7 +318,7 @@ func TestProcessHistoryRow(t *testing.T) {
 		}
 		row := &HistoryItem{
 			RatingKey: 42, Title: "Second",
-			Year: 2021, MediaType: Movie,
+			Year: 2021, MediaType: "movie",
 		}
 		ProcessHistoryRow(row, items)
 		if items["42"].Title != "First" {
@@ -330,7 +330,7 @@ func TestProcessHistoryRow(t *testing.T) {
 		items := map[string]TautulliEntry{}
 		row := &HistoryItem{
 			RatingKey: 42, Title: "Music",
-			Year: 2020, MediaType: MediaType("track"),
+			Year: 2020, MediaType: "track",
 		}
 		ProcessHistoryRow(row, items)
 		if len(items) != 0 {
@@ -343,7 +343,7 @@ func TestProcessHistoryRow(t *testing.T) {
 		row := &HistoryItem{
 			RatingKey: 99, GrandparentRatingKey: 0,
 			Title: "Episode", GrandparentTitle: "Show",
-			Year: 2021, MediaType: Episode,
+			Year: 2021, MediaType: "episode",
 		}
 		ProcessHistoryRow(row, items)
 		if len(items) != 0 {
@@ -358,7 +358,7 @@ func TestProcessHistoryRow(t *testing.T) {
 		row := &HistoryItem{
 			RatingKey: 99, GrandparentRatingKey: 50,
 			Title: "New Episode", GrandparentTitle: "Second Show",
-			Year: 2021, MediaType: Episode,
+			Year: 2021, MediaType: "episode",
 		}
 		ProcessHistoryRow(row, items)
 		if items["50"].Title != "First Show" {
@@ -370,7 +370,7 @@ func TestProcessHistoryRow(t *testing.T) {
 		items := map[string]TautulliEntry{}
 		row := &HistoryItem{
 			RatingKey: 42, Title: "String Key Movie",
-			Year: 2020, MediaType: Movie, GUID: "imdb://tt1234567",
+			Year: 2020, MediaType: "movie", GUID: "imdb://tt1234567",
 		}
 		ProcessHistoryRow(row, items)
 		if len(items) != 1 {
@@ -385,7 +385,7 @@ func TestProcessHistoryRow(t *testing.T) {
 		items := map[string]TautulliEntry{}
 		row := &HistoryItem{
 			RatingKey: FlexInt(-1), Title: "Negative Key",
-			Year: 2020, MediaType: Movie,
+			Year: 2020, MediaType: "movie",
 		}
 		ProcessHistoryRow(row, items)
 		if len(items) != 0 {
@@ -686,5 +686,35 @@ func TestMatchStaleItems_EpisodeGUIDResolution(t *testing.T) {
 	}
 	if matched[0].NewKey != "200" || matched[0].Method != MethodEpisodeGUID {
 		t.Errorf("got (%q, %q), want (200, episode-guid)", matched[0].NewKey, matched[0].Method)
+	}
+}
+
+// TestProcessHistoryRow_UnknownMediaTypeSkipped is a focused regression test for
+// the fail-open processing contract. HistoryItem.MediaType is decoded as a plain
+// string (so an unexpected wire value never fails the page decode), and
+// ProcessHistoryRow parses it via ParseMediaType: a row whose media_type is
+// "track" (music) is skipped and contributes no entry, while the movie and
+// episode rows in the same batch are processed normally.
+func TestProcessHistoryRow_UnknownMediaTypeSkipped(t *testing.T) {
+	items := map[string]TautulliEntry{}
+	rows := []*HistoryItem{
+		{RatingKey: 42, Title: "Movie", Year: 2020, MediaType: "movie", GUID: "imdb://tt1234567"},
+		{RatingKey: 99, GrandparentRatingKey: 50, Title: "Ep", GrandparentTitle: "Show", Year: 2021, MediaType: "episode", GUID: "tvdb://271557"},
+		{RatingKey: 7, Title: "Song", Year: 2019, MediaType: "track"},
+	}
+	for _, row := range rows {
+		ProcessHistoryRow(row, items)
+	}
+	if len(items) != 2 {
+		t.Fatalf("items = %d, want 2 (movie + show; the track row is skipped)", len(items))
+	}
+	if items["42"].MediaType != Movie {
+		t.Errorf("movie row not processed: items[42] = %+v", items["42"])
+	}
+	if items["50"].MediaType != Show {
+		t.Errorf("episode row not processed into its show: items[50] = %+v", items["50"])
+	}
+	if _, ok := items["7"]; ok {
+		t.Errorf("track row should have been skipped, but items[7] exists: %+v", items["7"])
 	}
 }

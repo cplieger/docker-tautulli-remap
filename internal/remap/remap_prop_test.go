@@ -165,7 +165,7 @@ func TestProcessHistoryRow_never_removes_entries(t *testing.T) {
 			beforeKeys[k] = v.Title
 		}
 
-		mediaType := MediaType(rapid.SampledFrom([]string{"movie", "episode", "track", ""}).Draw(t, "media_type"))
+		mediaType := rapid.SampledFrom([]string{"movie", "episode", "track", ""}).Draw(t, "media_type")
 		row := &HistoryItem{
 			RatingKey:            FlexInt(rapid.IntRange(-1, 10).Draw(t, "rk")),
 			GrandparentRatingKey: FlexInt(rapid.IntRange(-1, 10).Draw(t, "grk")),
