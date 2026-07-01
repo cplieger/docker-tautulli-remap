@@ -181,7 +181,7 @@ func FuzzMatchOne(f *testing.F) {
 		}
 		validKeys := map[string]bool{"200": true, "300": true, "400": true, "500": true}
 
-		newKey, method := matchOne(item, "100", byGUID, byTitleYear, byTitle, true, true)
+		newKey, method := matchOne(item, "100", nil, byGUID, byTitleYear, byTitle, true, true)
 
 		// A returned key is never invented: it must be one of the index entries.
 		if newKey != "" && !validKeys[newKey] {

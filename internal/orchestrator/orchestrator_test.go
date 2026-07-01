@@ -32,6 +32,8 @@ func (f *fakePlex) LibraryAll(_ context.Context, _ string) ([]remap.LibItem, err
 	return []remap.LibItem{{RatingKey: 1, Title: "Test", Year: 2020, GUIDs: []string{"imdb://tt0001"}}}, nil
 }
 
+func (f *fakePlex) ResolveEpisodeShow(_ context.Context, _ string) (string, error) { return "", nil }
+
 type fakeTautulli struct{}
 
 func (f *fakeTautulli) APIWithRetry(_ context.Context, _ string, _ url.Values) ([]byte, error) {
@@ -1279,5 +1281,73 @@ func TestRun_DryRunWithMatch_PreviewsClear(t *testing.T) {
 	}
 	if strings.Contains(out, "skipping clear recently added") {
 		t.Errorf("dry-run with a match must not take the no-updates skip branch; log:\n%s", out)
+	}
+}
+
+// resolveFakePlex embeds fakePlex and overrides ResolveEpisodeShow with a
+// programmable function so show-resolution behaviour can be exercised directly.
+type resolveFakePlex struct {
+	fakePlex
+	resolve func(ctx context.Context, guid string) (string, error)
+}
+
+func (f *resolveFakePlex) ResolveEpisodeShow(ctx context.Context, guid string) (string, error) {
+	return f.resolve(ctx, guid)
+}
+
+func TestResolveStaleShows(t *testing.T) {
+	stale := map[string]remap.TautulliEntry{
+		"10": {RatingKey: "10", MediaType: remap.Show, EpisodeGUIDs: []string{"plex://episode/a"}},
+		"20": {RatingKey: "20", MediaType: remap.Movie, GUID: "imdb://tt1"},                        // movie: skipped
+		"30": {RatingKey: "30", MediaType: remap.Show},                                             // show, no episode GUIDs: skipped
+		"40": {RatingKey: "40", MediaType: remap.Show, EpisodeGUIDs: []string{"plex://episode/d"}}, // resolves to itself
+	}
+	fp := &resolveFakePlex{resolve: func(_ context.Context, guid string) (string, error) {
+		switch guid {
+		case "plex://episode/a":
+			return "11", nil
+		case "plex://episode/d":
+			return "40", nil // same as the stale key: must be dropped
+		default:
+			return "", nil
+		}
+	}}
+	o := New(fp, &fakeTautulli{}, &config.Config{})
+
+	resolved := o.resolveStaleShows(context.Background(), stale)
+	if len(resolved) != 1 {
+		t.Fatalf("resolved = %v, want exactly {10:11}", resolved)
+	}
+	if resolved["10"] != "11" {
+		t.Errorf("resolved[10] = %q, want 11", resolved["10"])
+	}
+	if _, ok := resolved["40"]; ok {
+		t.Error("a resolution to the same (unchanged) key must not be recorded")
+	}
+}
+
+func TestResolveOneShow_TriesUntilResolvedToleratingErrors(t *testing.T) {
+	var calls int32
+	fp := &resolveFakePlex{resolve: func(_ context.Context, guid string) (string, error) {
+		atomic.AddInt32(&calls, 1)
+		switch guid {
+		case "plex://episode/err":
+			return "", fmt.Errorf("transient boom") // error: logged, try next
+		case "plex://episode/miss":
+			return "", nil // no match: try next
+		case "plex://episode/hit":
+			return "500", nil
+		}
+		return "", nil
+	}}
+	o := New(fp, &fakeTautulli{}, &config.Config{})
+
+	got := o.resolveOneShow(context.Background(),
+		[]string{"plex://episode/err", "plex://episode/miss", "plex://episode/hit"})
+	if got != "500" {
+		t.Errorf("resolveOneShow = %q, want 500", got)
+	}
+	if calls != 3 {
+		t.Errorf("resolve calls = %d, want 3 (each tried until the hit)", calls)
 	}
 }

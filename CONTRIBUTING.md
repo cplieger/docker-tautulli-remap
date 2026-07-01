@@ -25,12 +25,15 @@ anything else. All real logic lives under `internal/`:
 - `internal/config` — environment parsing into a `Config` struct. Required
   vars (`TAUTULLI_APIKEY`, `PLEX_TOKEN`) return a `MissingEnvError`; booleans
   go through `getEnvBool` (tolerant of `true/1/yes/on`).
-- `internal/orchestrator` — coordinates the six-step run: collect Tautulli
-  history, find stale keys, build the Plex index, match, apply remappings,
-  clear recently-added. Owns the scheduler loop and the circuit breaker.
+- `internal/orchestrator` — coordinates the run: collect Tautulli
+  history, find stale keys, build the Plex index, resolve stale shows via their
+  episode GUIDs, match, apply remappings, clear recently-added. Owns the
+  scheduler loop and the circuit breaker.
 - `internal/remap` — pure matching logic and domain types. No I/O. GUID
-  normalization, the three-strategy match chain, the Plex index builder, and
-  all the `MediaType` / `MatchMethod` / `RatingKey` types live here.
+  normalization, the match chain (episode-GUID, GUID, title+year, title-only),
+  history-row processing (which captures each show's watched episode GUIDs for
+  resolution), the Plex index builder, and all the `MediaType` / `MatchMethod`
+  / `RatingKey` types live here.
 - `internal/plex`, `internal/tautulli` — HTTP API clients for each upstream.
   Both wrap their reads in `cplieger/httpx` for bounded retry on transient
   failures (Plex reads use `httpx.RetryWithBackoff`; Tautulli reads use
@@ -55,13 +58,16 @@ var (
 When you add a method the orchestrator needs, add it to the consumer interface
 and the assertions catch a missing implementation at build time.
 
-**The match chain is ordered by increasing aggressiveness.** The per-item
-matcher `matchOne` (driven by the exported `MatchStaleItems`) tries GUID,
-then title+year (gated by `FallbackTitleYear`), then title-only
-(gated by `FallbackTitleOnly`, and guarded to the same media type). Every
-strategy refuses to return the old key. Keep this ordering and the
+**The match chain is ordered most-precise first.** The per-item matcher
+`matchOne` (driven by the exported `MatchStaleItems`) tries, in order:
+episode-GUID resolution (an exact show match the orchestrator pre-computes by
+resolving a watched episode's GUID against Plex and passes in as a `resolved`
+map), then GUID, then title+year (gated by `FallbackTitleYear`), then
+title-only (gated by `FallbackTitleOnly`, and guarded to the same media type).
+Every strategy refuses to return the old key. Keep this ordering and the
 old-key guard when extending it — they are the safety net against false
-matches.
+matches. The Plex lookup for episode-GUID resolution lives in the orchestrator,
+so `matchOne` stays pure and table-testable.
 
 **Dry-run is the default and must stay safe.** `DRY_RUN` defaults to `true`.
 In dry-run the orchestrator skips the backup, logs each would-be remap at

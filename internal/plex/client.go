@@ -8,6 +8,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"strconv"
 	"time"
 
@@ -260,4 +261,98 @@ func parseLibraryItems(body []byte) ([]remap.LibItem, error) {
 		})
 	}
 	return items, nil
+}
+
+// maxPlexResolve caps the body of an episode-GUID resolution response. A single
+// item's metadata is tiny; the ceiling only guards against a pathological
+// response where many libraries share one GUID.
+const maxPlexResolve = 1 << 20
+
+// ResolveEpisodeShow resolves a Plex episode GUID (plex://episode/<hash>) to
+// the rating key of the show that currently contains it, via
+// /library/all?guid=<guid>. Tautulli history retains the episode GUID even when
+// it never stored the show's own GUID, so this is the exact handle back to a
+// stale show's current key. It returns ("", nil) when the GUID matches nothing
+// (the episode is no longer in any library) so the caller can try another
+// episode or fall back to title matching; a non-nil error means the lookup
+// could not be completed (auth, rate limit, persistent 5xx, or transport), and
+// transient failures are retried with bounded backoff. When multiple items
+// share the GUID and disagree on their grandparent, the result is ambiguous and
+// ("", nil) is returned rather than guessing.
+func (c *Client) ResolveEpisodeShow(ctx context.Context, episodeGUID string) (string, error) {
+	if episodeGUID == "" {
+		return "", nil
+	}
+	return httpx.RetryWithBackoff[string](ctx, plexReadMaxAttempts, plexReadBaseDelay, "plex guid resolve",
+		func(ctx context.Context) (string, error) {
+			return c.resolveEpisodeShowOnce(ctx, episodeGUID)
+		})
+}
+
+// resolveEpisodeShowOnce performs a single episode-GUID resolution with a
+// per-attempt 30s timeout. A 5xx maps to an *HTTPStatusError (only 502/503/504
+// transient); 401/403 and 429 surface immediately, as does a parse failure. A
+// 404 is not expected here (Plex returns 200 with an empty result set for an
+// unknown GUID) but is treated as "no match" for robustness.
+func (c *Client) resolveEpisodeShowOnce(ctx context.Context, episodeGUID string) (string, error) {
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	req, err := c.newPlexRequest(ctx, "/library/all?"+url.Values{"guid": {episodeGUID}}.Encode())
+	if err != nil {
+		return "", fmt.Errorf("build Plex guid resolve request: %w", err)
+	}
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("fetch Plex guid resolve: %w", err)
+	}
+	defer resp.Body.Close()
+	switch resp.StatusCode {
+	case http.StatusOK:
+		// fall through to parse below
+	case http.StatusNotFound:
+		httpx.DrainClose(resp.Body)
+		return "", nil
+	default:
+		httpx.DrainClose(resp.Body)
+		if statusErr := httpx.CheckHTTPStatus(resp); statusErr != nil {
+			return "", statusErr
+		}
+		return "", fmt.Errorf("unexpected Plex guid resolve status %d", resp.StatusCode)
+	}
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxPlexResolve))
+	if err != nil {
+		return "", fmt.Errorf("read Plex guid resolve response: %w", err)
+	}
+	return parseGrandparentRatingKey(body)
+}
+
+// parseGrandparentRatingKey extracts the single show rating key shared by every
+// item in a /library/all?guid= response. It returns "" (no error) when there
+// are no items, when any item lacks a numeric grandparentRatingKey, or when
+// items disagree on their grandparent (an ambiguous GUID that must not drive a
+// match).
+func parseGrandparentRatingKey(body []byte) (string, error) {
+	var result struct {
+		MediaContainer struct {
+			Metadata []struct {
+				GrandparentRatingKey string `json:"grandparentRatingKey"`
+			} `json:"Metadata"`
+		} `json:"MediaContainer"`
+	}
+	if err := json.Unmarshal(body, &result); err != nil {
+		return "", fmt.Errorf("parse Plex guid resolve: %w", err)
+	}
+	show := ""
+	for _, m := range result.MediaContainer.Metadata {
+		if !remap.RatingKey(m.GrandparentRatingKey).IsValid() {
+			return "", nil
+		}
+		switch {
+		case show == "":
+			show = m.GrandparentRatingKey
+		case show != m.GrandparentRatingKey:
+			return "", nil // ambiguous: one GUID under multiple shows
+		}
+	}
+	return show, nil
 }
