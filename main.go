@@ -27,7 +27,6 @@ import (
 var (
 	_ orchestrator.PlexClient     = (*plex.Client)(nil)
 	_ orchestrator.TautulliClient = (*tautulli.Client)(nil)
-	_ health.Signal               = (*health.Marker)(nil)
 )
 
 func main() {
