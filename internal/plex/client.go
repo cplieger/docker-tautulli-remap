@@ -30,6 +30,15 @@ const plexReadBaseDelay = 200 * time.Millisecond
 // a Plex read request before a transient failure is surfaced to the caller.
 const plexReadMaxAttempts = 3
 
+// plexReadTimeout is the per-attempt timeout for the lightweight Plex reads:
+// item-existence, section list, and episode-GUID resolution.
+const plexReadTimeout = 30 * time.Second
+
+// plexLibraryAllTimeout is the per-attempt timeout for a full library-section
+// fetch, which returns far more data than the other reads (mirrors the
+// README's documented "60s for the Plex library fetch").
+const plexLibraryAllTimeout = 60 * time.Second
+
 // Client is the concrete Plex API client.
 type Client struct {
 	httpClient *http.Client
@@ -77,11 +86,12 @@ func (c *Client) ItemExists(ctx context.Context, ratingKey string) (bool, error)
 
 // itemExistsOnce performs a single Plex metadata existence check with a
 // per-attempt 30s timeout. It returns (true, nil) on 200 and (false, nil) on
-// 404; a 5xx maps to a transient *httpx.HTTPStatusError (502/503/504 retried),
-// while 401/403 (*AuthError) and 429 (*RateLimitError) are non-transient and
-// surface immediately. Transport errors are returned for httpx to classify.
+// 404; a 5xx maps to an *HTTPStatusError, of which only 502/503/504 are
+// transient (retried by ItemExists); other 5xx are non-transient and surface
+// immediately, as do 401/403 (*AuthError) and 429 (*RateLimitError). Transport
+// errors are returned for httpx to classify.
 func (c *Client) itemExistsOnce(ctx context.Context, ratingKey string) (bool, error) {
-	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, plexReadTimeout)
 	defer cancel()
 	req, err := c.newPlexRequest(ctx, "/library/metadata/"+ratingKey)
 	if err != nil {
@@ -99,7 +109,15 @@ func (c *Client) itemExistsOnce(ctx context.Context, ratingKey string) (bool, er
 	case http.StatusNotFound:
 		return false, nil
 	default:
-		return false, httpx.CheckHTTPStatus(resp)
+		if statusErr := httpx.CheckHTTPStatus(resp); statusErr != nil {
+			return false, statusErr
+		}
+		// A non-{200,404} status that CheckHTTPStatus does not classify as an
+		// error (a 3xx redirect surfaced by the client's ErrUseLastResponse
+		// policy, or an unexpected 2xx) leaves existence undetermined. Fail
+		// closed so FindStaleKeys does not treat the item as stale and remap it,
+		// mirroring the other three Plex read paths.
+		return false, fmt.Errorf("unexpected Plex item status %d", resp.StatusCode)
 	}
 }
 
@@ -123,7 +141,7 @@ func (c *Client) LibrarySections(ctx context.Context) ([]remap.Section, error) {
 // transient read failure (a truncated body or a connection reset mid-read) is
 // retried by LibrarySections.
 func (c *Client) librarySectionsOnce(ctx context.Context) ([]remap.Section, error) {
-	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, plexReadTimeout)
 	defer cancel()
 	req, err := c.newPlexRequest(ctx, "/library/sections")
 	if err != nil {
@@ -190,7 +208,7 @@ func (c *Client) LibraryAll(ctx context.Context, sectionKey string) ([]remap.Lib
 // transient read failure (a truncated body or a connection reset mid-read) is
 // retried by LibraryAll.
 func (c *Client) libraryAllOnce(ctx context.Context, sectionKey string) ([]remap.LibItem, error) {
-	ctx, cancel := context.WithTimeout(ctx, 60*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, plexLibraryAllTimeout)
 	defer cancel()
 	req, err := c.newPlexRequest(ctx, "/library/sections/"+sectionKey+"/all")
 	if err != nil {
@@ -295,7 +313,7 @@ func (c *Client) ResolveEpisodeShow(ctx context.Context, episodeGUID string) (st
 // 404 is not expected here (Plex returns 200 with an empty result set for an
 // unknown GUID) but is treated as "no match" for robustness.
 func (c *Client) resolveEpisodeShowOnce(ctx context.Context, episodeGUID string) (string, error) {
-	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, plexReadTimeout)
 	defer cancel()
 	req, err := c.newPlexRequest(ctx, "/library/all?"+url.Values{"guid": {episodeGUID}}.Encode())
 	if err != nil {
