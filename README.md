@@ -18,12 +18,10 @@ When you reorganize your Plex libraries (move files, re-add content, change fold
 
 For each stale entry, it finds the correct current rating key in Plex using a chain of strategies, most precise first:
 
-1. **Episode-GUID resolution** (TV shows) — resolves a show through one of its watched episodes' stable Plex GUIDs, which map directly to the show's current key. Exact and collision-free: a single show-level remap then repairs the show's entire history, since Tautulli cascades it to every season and episode.
+1. **Episode-GUID resolution** (TV shows) — resolves a show through one of its watched episodes' stable Plex GUIDs, which map directly to the show's current key. Exact and collision-free, and it restores the show's full watch history (all seasons and episodes).
 2. **GUID match** — Plex's globally unique identifier; covers movies and shows whose history still carries a show-level GUID (e.g. the legacy `thetvdb` agent).
 3. **Title+year match** (fallback) — matches by title and release year when no GUID resolves.
 4. **Title-only with media type guard** (optional) — last resort matching by title alone, restricted to the same media type to reduce false positives.
-
-> Why episode-GUID resolution matters: Tautulli's history stores an episode's own GUID and year, but never the show's GUID or premiere year. After a Plex agent migration or library rebuild, a show's own GUID no longer matches and the episode year never lines up with the show's premiere year, so GUID and title+year both miss for TV. Resolving the show through a watched episode's GUID sidesteps both problems.
 
 ### Why this design
 
@@ -118,7 +116,8 @@ The container includes a built-in Docker healthcheck via the `/tautulli-remap he
 
 No network listener; connects outbound to Tautulli and Plex
 only. Set `DRY_RUN=true` on first run to preview changes safely.
-API tokens are never logged. Stdlib-only (zero external deps).
+API tokens are never logged. Stdlib-first, with a minimal first-party
+dependency set.
 Runs as `nonroot` on a distroless base image with no shell,
 under the hardened compose profile
 (`read_only: true`, `cap_drop: [ALL]`,
