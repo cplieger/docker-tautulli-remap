@@ -16,17 +16,20 @@ Fix broken Tautulli watch history after reorganizing your Plex libraries.
 
 When you reorganize your Plex libraries (move files, re-add content, change folder structure), Plex assigns new internal IDs to your media. This breaks Tautulli's watch history — it can no longer link history entries to the right items. This tool automatically finds the correct new IDs and updates Tautulli's database, preserving your watch history and statistics.
 
-For each stale entry, it attempts to find the correct current rating key in Plex using three matching strategies:
+For each stale entry, it finds the correct current rating key in Plex using a chain of strategies, most precise first:
 
-1. **GUID match** (primary) — matches on Plex's globally unique identifier, the most reliable method.
-2. **Title+year match** (fallback) — when GUID matching fails, tries matching by title and release year.
-3. **Title-only with media type guard** (optional) — last resort matching by title alone, restricted to the same media type to reduce false positives.
+1. **Episode-GUID resolution** (TV shows) — resolves a show through one of its watched episodes' stable Plex GUIDs, which map directly to the show's current key. Exact and collision-free: a single show-level remap then repairs the show's entire history, since Tautulli cascades it to every season and episode.
+2. **GUID match** — Plex's globally unique identifier; covers movies and shows whose history still carries a show-level GUID (e.g. the legacy `thetvdb` agent).
+3. **Title+year match** (fallback) — matches by title and release year when no GUID resolves.
+4. **Title-only with media type guard** (optional) — last resort matching by title alone, restricted to the same media type to reduce false positives.
+
+> Why episode-GUID resolution matters: Tautulli's history stores an episode's own GUID and year, but never the show's GUID or premiere year. After a Plex agent migration or library rebuild, a show's own GUID no longer matches and the episode year never lines up with the show's premiere year, so GUID and title+year both miss for TV. Resolving the show through a watched episode's GUID sidesteps both problems.
 
 ### Why this design
 
 - **Three run modes** — `SCHEDULE_INTERVAL (e.g. "24h")` for a built-in timer, `SCHEDULE_INTERVAL=off` for resident-idle (stays healthy, awaits `docker exec ... tautulli-remap trigger`), or `tautulli-remap trigger` for a one-shot pass that exits 0/1.
 - **Dry-run by default for safety** — no changes are applied until you explicitly set `DRY_RUN=false`, so you can always preview first.
-- **Three matching strategies with increasing aggressiveness** — starts with the safest (GUID), falls back to title+year, and optionally title-only, giving you control over the risk/coverage tradeoff.
+- **Matching strategies with increasing aggressiveness** — starts with the exact ones (episode-GUID resolution for shows, GUID match for movies), falls back to title+year, and optionally title-only, giving you control over the risk/coverage tradeoff.
 - **Stdlib-first, minimal dependencies** — pure Go on the standard library plus a small first-party shared-lib set (`health`, `httpx`) and `golang.org/x/sync`, minimizing supply-chain risk.
 - **Distroless and rootless** — runs as `nonroot` on `gcr.io/distroless/static` with no shell or package manager.
 
@@ -90,7 +93,7 @@ services:
     labels:
       ofelia.enabled: "true"
       ofelia.job-exec.tautulli-remap.schedule: "0 0 3 * * *"
-      ofelia.job-exec.tautulli-remap.command: "tautulli-remap trigger"
+      ofelia.job-exec.tautulli-remap.command: "/tautulli-remap trigger"
 ```
 
 This keeps the container healthy (passing healthchecks) while delegating scheduling to Ofelia — the recommended pattern for external scheduling.

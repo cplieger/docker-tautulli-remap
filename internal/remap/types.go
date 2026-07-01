@@ -43,12 +43,17 @@ func (m *MediaType) UnmarshalText(text []byte) error {
 // MatchMethod identifies the strategy used to match a stale item.
 type MatchMethod string
 
-// MethodGUID, MethodTitleYear, and MethodTitleOnly enumerate the available
-// matching strategies in increasing order of aggressiveness.
+// MethodEpisodeGUID, MethodGUID, MethodTitleYear, and MethodTitleOnly enumerate
+// the available matching strategies in increasing order of aggressiveness.
+// MethodEpisodeGUID is show-only: a stale show is resolved through one of its
+// watched episodes' GUIDs (which Tautulli history retains even when the show's
+// own GUID is not stored), giving an exact current show key with no title or
+// year guesswork.
 const (
-	MethodGUID      MatchMethod = "guid"
-	MethodTitleYear MatchMethod = "title+year"
-	MethodTitleOnly MatchMethod = "title only"
+	MethodEpisodeGUID MatchMethod = "episode-guid"
+	MethodGUID        MatchMethod = "guid"
+	MethodTitleYear   MatchMethod = "title+year"
+	MethodTitleOnly   MatchMethod = "title only"
 )
 
 // String returns the string representation of a MatchMethod.
@@ -109,6 +114,14 @@ type TautulliEntry struct {
 	Year      string
 	MediaType MediaType
 	GUID      string
+	// EpisodeGUIDs holds the stable, show-agnostic Plex episode GUIDs
+	// (plex://episode/<hash>) observed in history for a Show entry. Tautulli
+	// history stores an episode's own GUID but not its show's, so these are the
+	// only durable handle back to the show: resolving any one of them against
+	// Plex yields the show's current rating key. Empty for movies and for shows
+	// whose history predates the plex:// agent (those carry a show-level GUID in
+	// GUID instead). Deduplicated and capped at maxEpisodeGUIDsPerShow.
+	EpisodeGUIDs []string
 }
 
 // PlexEntry represents a Plex library item used for matching.

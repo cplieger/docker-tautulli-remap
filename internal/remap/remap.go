@@ -2,9 +2,16 @@ package remap
 
 import (
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 )
+
+// maxEpisodeGUIDsPerShow caps how many distinct episode GUIDs are retained per
+// show entry. Resolution needs only one to succeed; retaining a few gives
+// resilience when the first-tried episode was removed from Plex, while bounding
+// memory for shows with thousands of watched episodes.
+const maxEpisodeGUIDsPerShow = 5
 
 // NormalizeGUID extracts a canonical ID from a Plex GUID string.
 // Returns empty string for unsupported formats.
@@ -39,19 +46,29 @@ func extractAfter(s, prefix string) string {
 	return after
 }
 
-// matchOne applies the GUID → title+year → title-only strategy chain to a
-// single stale item, returning the new Plex rating key and the method
-// string. Returns ("", "") when no strategy matched. Every strategy is
-// media-type-safe: strategy 1 guards on media type explicitly (byGUID is not
-// type-keyed), and strategies 2 and 3 look up keys that encode the media type
-// (see titleYearKey/titleKey), so a stale item never cross-type matches.
+// matchOne applies the episode-GUID → GUID → title+year → title-only strategy
+// chain to a single stale item, returning the new Plex rating key and the
+// method string. Returns ("", "") when no strategy matched. Every strategy is
+// media-type-safe: strategy 0 (resolved) is populated only for shows, strategy
+// 1 guards on media type explicitly (byGUID is not type-keyed), and strategies
+// 2 and 3 look up keys that encode the media type (see titleYearKey/titleKey),
+// so a stale item never cross-type matches.
 func matchOne(
 	item *TautulliEntry,
 	oldKey string,
+	resolved map[string]string,
 	byGUID, byTitleYear, byTitle map[string]PlexEntry,
 	fallbackTitleYear, fallbackTitleOnly bool,
 ) (newKey string, method MatchMethod) {
-	normalizedTitle := NormalizeTitle(item.Title)
+	// Strategy 0: Episode-GUID resolution (shows only). The orchestrator has
+	// already looked up one of this stale show's watched episode GUIDs in Plex
+	// and recorded the current show key; prefer that exact result over any
+	// title/year heuristic. Only shows populate resolved, and the resolver
+	// validates the key, so the newKey != oldKey guard is all that is needed to
+	// reject a no-op (unchanged-key) resolution.
+	if rk, ok := resolved[oldKey]; ok && rk != oldKey {
+		return rk, MethodEpisodeGUID
+	}
 
 	// Strategy 1: Match by GUID. byGUID is keyed by the global, normalized GUID
 	// (not by media type), so a stale item and an index entry can share a GUID
@@ -66,20 +83,34 @@ func matchOne(
 		}
 	}
 
-	// Strategy 2: Match by title+year. The lookup key folds in the stale item's
-	// media type (see titleYearKey), so it can only resolve to a same-type slot;
-	// an explicit pe.Type == item.MediaType guard is therefore redundant here and
-	// is omitted.
-	if fallbackTitleYear && normalizedTitle != "" {
+	// Strategies 2 and 3: title-based fallbacks. Both lookup keys fold in the
+	// media type (see titleYearKey/titleKey), so a match is same-type by
+	// construction and needs no separate type guard.
+	return matchByTitle(item, oldKey, byTitleYear, byTitle, fallbackTitleYear, fallbackTitleOnly)
+}
+
+// matchByTitle applies the title+year and (optionally) title-only fallback
+// strategies to a stale item, returning ("", "") when neither enabled strategy
+// matches or the item has no usable title. The lookup keys encode the media
+// type, so any match is same-type by construction.
+func matchByTitle(
+	item *TautulliEntry,
+	oldKey string,
+	byTitleYear, byTitle map[string]PlexEntry,
+	fallbackTitleYear, fallbackTitleOnly bool,
+) (string, MatchMethod) {
+	normalizedTitle := NormalizeTitle(item.Title)
+	if normalizedTitle == "" {
+		return "", ""
+	}
+
+	if fallbackTitleYear {
 		if pe, ok := byTitleYear[titleYearKey(normalizedTitle, item.Year, item.MediaType)]; ok && pe.RatingKey != oldKey {
 			return pe.RatingKey, MethodTitleYear
 		}
 	}
 
-	// Strategy 3: Match by title only. As in strategy 2 the lookup key encodes
-	// the media type (see titleKey), so the match is same-type by construction
-	// and needs no separate type guard.
-	if fallbackTitleOnly && normalizedTitle != "" {
+	if fallbackTitleOnly {
 		if pe, ok := byTitle[titleKey(normalizedTitle, item.MediaType)]; ok && pe.RatingKey != oldKey {
 			return pe.RatingKey, MatchMethod(fmt.Sprintf("%s (%s -> %s)", MethodTitleOnly, item.Year, pe.Year))
 		}
@@ -88,9 +119,12 @@ func matchOne(
 	return "", ""
 }
 
-// MatchStaleItems matches all stale items against the Plex index.
+// MatchStaleItems matches all stale items against the Plex index, preferring
+// the orchestrator-supplied episode-GUID resolutions (resolved: stale show key
+// -> current show key) over the index-based heuristics.
 func MatchStaleItems(
 	stale map[string]TautulliEntry,
+	resolved map[string]string,
 	byGUID, byTitleYear, byTitle map[string]PlexEntry,
 	fallbackTitleYear, fallbackTitleOnly bool,
 ) ([]MatchResult, []UnmatchResult) {
@@ -98,7 +132,7 @@ func MatchStaleItems(
 	var unmatched []UnmatchResult
 
 	for oldKey, item := range stale {
-		newKey, method := matchOne(&item, oldKey, byGUID, byTitleYear, byTitle, fallbackTitleYear, fallbackTitleOnly)
+		newKey, method := matchOne(&item, oldKey, resolved, byGUID, byTitleYear, byTitle, fallbackTitleYear, fallbackTitleOnly)
 		if newKey != "" {
 			matched = append(matched, MatchResult{
 				Title: item.Title, Year: item.Year,
@@ -116,9 +150,11 @@ func MatchStaleItems(
 	return matched, unmatched
 }
 
-// ProcessHistoryRow extracts a TautulliEntry from a single history row
-// and inserts it into items (keyed by rating key). Returns true when an
-// episode-level plex:// GUID had to be dropped.
+// ProcessHistoryRow extracts a TautulliEntry from a single history row and
+// inserts or merges it into items (keyed by rating key). For episodes it keys
+// by the grandparent (show) rating key and, when the row carries an
+// episode-scoped plex:// GUID, retains that GUID on the show entry for later
+// resolution. Returns true when an episode GUID was captured on this row.
 func ProcessHistoryRow(row *HistoryItem, items map[string]TautulliEntry) bool {
 	year := strconv.Itoa(int(row.Year))
 	guid := NormalizeGUID(row.GUID)
@@ -142,23 +178,47 @@ func ProcessHistoryRow(row *HistoryItem, items map[string]TautulliEntry) bool {
 			return false
 		}
 		key := strconv.Itoa(grandparentRatingKey)
-		if _, ok := items[key]; !ok {
-			title := row.GrandparentTitle
-			if title == "" {
-				title = row.Title
-			}
-			showGUID := guid
-			dropped := false
-			if strings.Contains(showGUID, "plex://episode/") {
-				showGUID = ""
-				dropped = true
-			}
-			items[key] = TautulliEntry{
-				RatingKey: key, Title: title,
-				Year: year, MediaType: Show, GUID: showGUID,
-			}
-			return dropped
+		// An episode-scoped plex:// GUID cannot identify the show for indexing,
+		// but it is the durable handle used to resolve the show's current key
+		// later, so retain it. A legacy agent GUID (e.g. thetvdb://<id>/<s>/<e>)
+		// normalizes to a show-level id (tvdb://<id>) and serves as the show
+		// GUID directly, matching the existing GUID index.
+		var episodeGUID, showGUID string
+		if strings.Contains(guid, "plex://episode/") {
+			episodeGUID = guid
+		} else {
+			showGUID = guid
 		}
+		return upsertShow(items, key, row, year, showGUID, episodeGUID)
 	}
 	return false
+}
+
+// upsertShow inserts or merges a Show entry keyed by its grandparent rating
+// key. Title and year are taken from the first row seen; a show-level GUID
+// fills a previously empty one; and distinct episode GUIDs accumulate (bounded
+// by maxEpisodeGUIDsPerShow) so resolution has several handles to try in case
+// the first-watched episode was later removed from Plex. Returns true when an
+// episode GUID was newly captured on this row.
+func upsertShow(items map[string]TautulliEntry, key string, row *HistoryItem, year, showGUID, episodeGUID string) bool {
+	entry, exists := items[key]
+	if !exists {
+		title := row.GrandparentTitle
+		if title == "" {
+			title = row.Title
+		}
+		entry = TautulliEntry{RatingKey: key, Title: title, Year: year, MediaType: Show, GUID: showGUID}
+	} else if entry.GUID == "" && showGUID != "" {
+		entry.GUID = showGUID
+	}
+
+	captured := false
+	if episodeGUID != "" && len(entry.EpisodeGUIDs) < maxEpisodeGUIDsPerShow &&
+		!slices.Contains(entry.EpisodeGUIDs, episodeGUID) {
+		entry.EpisodeGUIDs = append(entry.EpisodeGUIDs, episodeGUID)
+		captured = true
+	}
+
+	items[key] = entry
+	return captured
 }

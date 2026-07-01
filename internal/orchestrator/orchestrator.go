@@ -64,6 +64,7 @@ type PlexClient interface {
 	ItemExists(ctx context.Context, ratingKey string) (bool, error)
 	LibrarySections(ctx context.Context) ([]remap.Section, error)
 	LibraryAll(ctx context.Context, sectionKey string) ([]remap.LibItem, error)
+	ResolveEpisodeShow(ctx context.Context, episodeGUID string) (string, error)
 }
 
 // TautulliClient defines the interface for Tautulli API interactions, shaped
@@ -120,13 +121,13 @@ func (o *Orchestrator) Run(ctx context.Context) bool {
 
 	// Step 1: Collect items from Tautulli history
 	slog.Info("step 1: collecting items from Tautulli history")
-	tautulliItems, guidDropped := o.CollectTautulliItems(ctx)
+	tautulliItems, episodeGUIDsCaptured := o.CollectTautulliItems(ctx)
 	if tautulliItems == nil {
 		return false
 	}
 	slog.Info("step 1 done",
 		"unique_items", len(tautulliItems),
-		"episode_guids_dropped", guidDropped)
+		"episode_guids_captured", episodeGUIDsCaptured)
 	if ctx.Err() != nil {
 		slog.Info("run cancelled after history collection", "cause", context.Cause(ctx))
 		return false
@@ -161,9 +162,18 @@ func (o *Orchestrator) Run(ctx context.Context) bool {
 		return false
 	}
 
+	// Step 3.5: Resolve stale shows to their current key via episode GUIDs.
+	// This is the exact, collision-free match for shows; the index-based
+	// heuristics below remain as fallbacks (and handle movies + legacy shows).
+	// A cancellation mid-resolution needs no early return here: matching is a
+	// pure in-memory step and the apply phase already aborts on ctx.Err() before
+	// mutating Tautulli.
+	slog.Info("step 3.5: resolving shows via episode GUID")
+	resolved := o.resolveStaleShows(ctx, stale)
+
 	// Step 4: Match stale items
 	slog.Info("step 4: matching stale items")
-	matched, unmatched := remap.MatchStaleItems(stale, byGUID, byTitleYear, byTitle,
+	matched, unmatched := remap.MatchStaleItems(stale, resolved, byGUID, byTitleYear, byTitle,
 		o.cfg.FallbackTitleYear, o.cfg.FallbackTitleOnly)
 
 	// Step 5: Apply remappings
@@ -282,9 +292,9 @@ func (o *Orchestrator) RunScheduler(ctx context.Context, setHealthy func(bool)) 
 
 // CollectTautulliItems retrieves all unique items from Tautulli watch history,
 // returning a map of rating key to entry. Episodes are stored under their
-// grandparent (show) key; items whose GUID is episode-scoped rather than
-// show-scoped are counted in guidDropped and excluded from the map.
-func (o *Orchestrator) CollectTautulliItems(ctx context.Context) (items map[string]remap.TautulliEntry, guidDropped int) {
+// grandparent (show) key; their episode-scoped plex:// GUIDs are retained on
+// the show entry (for later resolution) and counted in episodeGUIDsCaptured.
+func (o *Orchestrator) CollectTautulliItems(ctx context.Context) (items map[string]remap.TautulliEntry, episodeGUIDsCaptured int) {
 	items = map[string]remap.TautulliEntry{}
 	start := 0
 	total := -1
@@ -310,7 +320,7 @@ func (o *Orchestrator) CollectTautulliItems(ctx context.Context) (items map[stri
 			break
 		}
 
-		guidDropped += addHistoryPage(page, items)
+		episodeGUIDsCaptured += addHistoryPage(page, items)
 		processed += len(page.Rows)
 
 		start += historyPageSize
@@ -323,7 +333,7 @@ func (o *Orchestrator) CollectTautulliItems(ctx context.Context) (items map[stri
 		}
 	}
 
-	return items, guidDropped
+	return items, episodeGUIDsCaptured
 }
 
 // fetchHistoryPage requests one page of Tautulli history starting at start. On
@@ -352,14 +362,14 @@ func (o *Orchestrator) fetchHistoryPage(ctx context.Context, start int) (*tautul
 }
 
 // addHistoryPage processes one page of Tautulli history rows into items,
-// returning the number of episode-level GUIDs that had to be dropped.
-func addHistoryPage(page *tautulli.HistoryPage, items map[string]remap.TautulliEntry) (dropped int) {
+// returning the number of episode GUIDs captured for later show resolution.
+func addHistoryPage(page *tautulli.HistoryPage, items map[string]remap.TautulliEntry) (captured int) {
 	for i := range page.Rows {
 		if remap.ProcessHistoryRow(&page.Rows[i], items) {
-			dropped++
+			captured++
 		}
 	}
-	return dropped
+	return captured
 }
 
 // FindStaleKeys checks each item in the Tautulli history map against the Plex
@@ -400,6 +410,70 @@ func (o *Orchestrator) FindStaleKeys(ctx context.Context, items map[string]remap
 
 	slog.Info("stale key check complete", "checked", len(items), "stale", len(stale))
 	return stale, nil
+}
+
+// resolveStaleShows resolves stale Show entries to their current Plex rating
+// key through one of their retained episode GUIDs, returning a map from stale
+// (grandparent) key to current key. Movies and shows without episode GUIDs
+// (e.g. legacy-agent history, which the GUID index handles) are skipped.
+// Lookups run in parallel bounded by plexParallelism. Resolution is
+// best-effort: a lookup error for one show is logged and that show falls
+// through to the index-based fallbacks, so a single failure never aborts the
+// run. A genuine Plex outage is already caught by the stale-key check and the
+// index build, both of which abort the run before this point.
+func (o *Orchestrator) resolveStaleShows(ctx context.Context, stale map[string]remap.TautulliEntry) map[string]string {
+	var mu sync.Mutex
+	resolved := map[string]string{}
+
+	g, gctx := errgroup.WithContext(ctx)
+	g.SetLimit(plexParallelism)
+
+	for oldKey, item := range stale {
+		if item.MediaType != remap.Show || len(item.EpisodeGUIDs) == 0 {
+			continue
+		}
+		g.Go(func() error {
+			if gctx.Err() != nil {
+				return nil
+			}
+			newKey := o.resolveOneShow(gctx, item.EpisodeGUIDs)
+			if newKey != "" && newKey != oldKey {
+				mu.Lock()
+				resolved[oldKey] = newKey
+				mu.Unlock()
+			}
+			return nil
+		})
+	}
+	_ = g.Wait()
+
+	if len(resolved) > 0 {
+		slog.Info("resolved shows via episode GUID", "count", len(resolved))
+	}
+	return resolved
+}
+
+// resolveOneShow tries each episode GUID in turn and returns the first show
+// rating key it resolves to, or "" if none resolve. A resolution error is
+// logged and treated as a miss for that GUID (the next is tried); the show
+// falls through to the index-based fallbacks if every GUID misses.
+func (o *Orchestrator) resolveOneShow(ctx context.Context, episodeGUIDs []string) string {
+	for _, guid := range episodeGUIDs {
+		if ctx.Err() != nil {
+			return ""
+		}
+		showKey, err := o.plex.ResolveEpisodeShow(ctx, guid)
+		if err != nil {
+			if ctx.Err() == nil {
+				slog.Warn("episode GUID resolution failed", "guid", guid, "error", err)
+			}
+			continue
+		}
+		if showKey != "" {
+			return showKey
+		}
+	}
+	return ""
 }
 
 // ApplyRemappings updates Tautulli metadata for each matched item and logs

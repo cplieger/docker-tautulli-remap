@@ -365,7 +365,7 @@ func TestMatch_CrossTypeSameTitleYear_RecoversMovieMatch(t *testing.T) {
 	stale := map[string]TautulliEntry{
 		"99": {RatingKey: "99", Title: "Dune", Year: "2021", MediaType: Movie, GUID: "imdb://stale-gone"},
 	}
-	matched, unmatched := MatchStaleItems(stale, byGUID, byTitleYear, byTitle, true, false)
+	matched, unmatched := MatchStaleItems(stale, nil, byGUID, byTitleYear, byTitle, true, false)
 	if len(matched) != 1 || len(unmatched) != 0 {
 		t.Fatalf("matched=%d unmatched=%d, want 1/0 (recovered same-type match)", len(matched), len(unmatched))
 	}
@@ -403,7 +403,7 @@ func TestMatch_SameTypeTitleYearTwin_StillRefusesToMatch(t *testing.T) {
 	stale := map[string]TautulliEntry{
 		"99": {RatingKey: "99", Title: "Dune", Year: "2021", MediaType: Movie, GUID: "imdb://stale-gone"},
 	}
-	matched, unmatched := MatchStaleItems(stale, byGUID, byTitleYear, byTitle, true, false)
+	matched, unmatched := MatchStaleItems(stale, nil, byGUID, byTitleYear, byTitle, true, false)
 	if len(matched) != 0 || len(unmatched) != 1 {
 		t.Fatalf("matched=%d unmatched=%d, want 0/1 (ambiguous slot pruned)", len(matched), len(unmatched))
 	}

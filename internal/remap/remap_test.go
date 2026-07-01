@@ -1,6 +1,8 @@
 package remap
 
 import (
+	"fmt"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -81,7 +83,7 @@ func TestMatchOne(t *testing.T) {
 	t.Run("guid match", func(t *testing.T) {
 		item := &TautulliEntry{GUID: "imdb://tt1", Title: "M", Year: "2020", MediaType: Movie}
 		byGUID := map[string]PlexEntry{"imdb://tt1": {RatingKey: "200", Type: Movie}}
-		key, method := matchOne(item, "100", byGUID, nil, nil, true, true)
+		key, method := matchOne(item, "100", nil, byGUID, nil, nil, true, true)
 		if key != "200" || method != MethodGUID {
 			t.Errorf("got (%q, %q), want (200, guid)", key, method)
 		}
@@ -95,7 +97,7 @@ func TestMatchOne(t *testing.T) {
 		// be remapped onto the wrong-type item.
 		item := &TautulliEntry{GUID: "tmdb://12345", Title: "Quiz Show", Year: "1994", MediaType: Movie}
 		byGUID := map[string]PlexEntry{"tmdb://12345": {RatingKey: "200", Title: "Quiz Show", Year: "1994", Type: Show}}
-		key, method := matchOne(item, "100", byGUID, nil, nil, true, true)
+		key, method := matchOne(item, "100", nil, byGUID, nil, nil, true, true)
 		if key != "" || method != "" {
 			t.Errorf("got (%q, %q), want empty (GUID strategy must reject a cross-type match)", key, method)
 		}
@@ -104,7 +106,7 @@ func TestMatchOne(t *testing.T) {
 	t.Run("title+year fallback", func(t *testing.T) {
 		item := &TautulliEntry{Title: "Movie", Year: "2020", MediaType: Movie}
 		byTY := map[string]PlexEntry{"movie|2020|movie": {RatingKey: "200", Type: Movie}}
-		key, method := matchOne(item, "100", nil, byTY, nil, true, true)
+		key, method := matchOne(item, "100", nil, nil, byTY, nil, true, true)
 		if key != "200" || method != MethodTitleYear {
 			t.Errorf("got (%q, %q), want (200, title+year)", key, method)
 		}
@@ -112,9 +114,30 @@ func TestMatchOne(t *testing.T) {
 
 	t.Run("no match", func(t *testing.T) {
 		item := &TautulliEntry{Title: "X", Year: "2020", MediaType: Movie}
-		key, method := matchOne(item, "100", nil, nil, nil, true, true)
+		key, method := matchOne(item, "100", nil, nil, nil, nil, true, true)
 		if key != "" || method != "" {
 			t.Errorf("got (%q, %q), want empty", key, method)
+		}
+	})
+
+	t.Run("episode-guid resolution takes priority over GUID index", func(t *testing.T) {
+		// A resolved show key is exact; it must win even when the GUID index
+		// would also produce a (necessarily lower-confidence) match.
+		item := &TautulliEntry{Title: "Show", Year: "2021", MediaType: Show, GUID: "tvdb://1"}
+		byGUID := map[string]PlexEntry{"tvdb://1": {RatingKey: "999", Type: Show}}
+		resolved := map[string]string{"100": "200"}
+		key, method := matchOne(item, "100", resolved, byGUID, nil, nil, true, true)
+		if key != "200" || method != MethodEpisodeGUID {
+			t.Errorf("got (%q, %q), want (200, episode-guid)", key, method)
+		}
+	})
+
+	t.Run("episode-guid resolution to the same key is not a match", func(t *testing.T) {
+		item := &TautulliEntry{Title: "Show", Year: "2021", MediaType: Show}
+		resolved := map[string]string{"100": "100"} // unchanged key
+		key, method := matchOne(item, "100", resolved, nil, nil, nil, true, true)
+		if key != "" || method != "" {
+			t.Errorf("got (%q, %q), want empty (a no-op resolution must not match)", key, method)
 		}
 	})
 }
@@ -181,7 +204,7 @@ func TestProcessHistoryRow(t *testing.T) {
 		}
 	})
 
-	t.Run("episode strips plex episode GUID", func(t *testing.T) {
+	t.Run("episode captures plex episode GUID for resolution", func(t *testing.T) {
 		items := map[string]TautulliEntry{}
 		row := &HistoryItem{
 			RatingKey: 99, GrandparentRatingKey: 50,
@@ -189,12 +212,90 @@ func TestProcessHistoryRow(t *testing.T) {
 			Year: 2021, MediaType: Episode,
 			GUID: "plex://episode/5d9c135046115600200d30a2",
 		}
-		dropped := ProcessHistoryRow(row, items)
-		if !dropped {
-			t.Error("expected dropped=true for plex episode GUID")
+		captured := ProcessHistoryRow(row, items)
+		if !captured {
+			t.Error("expected captured=true for plex episode GUID")
 		}
-		if items["50"].GUID != "" {
-			t.Errorf("expected empty GUID for plex episode, got %q", items["50"].GUID)
+		entry := items["50"]
+		// An episode-scoped GUID must not be used as the show's own GUID...
+		if entry.GUID != "" {
+			t.Errorf("expected empty show GUID for plex episode, got %q", entry.GUID)
+		}
+		// ...but it must be retained so the show can be resolved through it.
+		if want := []string{"plex://episode/5d9c135046115600200d30a2"}; !slices.Equal(entry.EpisodeGUIDs, want) {
+			t.Errorf("EpisodeGUIDs = %v, want %v", entry.EpisodeGUIDs, want)
+		}
+	})
+
+	t.Run("multiple episodes accumulate distinct GUIDs and dedup", func(t *testing.T) {
+		items := map[string]TautulliEntry{}
+		mk := func(guid string) *HistoryItem {
+			return &HistoryItem{
+				RatingKey: 1, GrandparentRatingKey: 50, Title: "Ep",
+				GrandparentTitle: "Show", Year: 2021, MediaType: Episode, GUID: guid,
+			}
+		}
+		ProcessHistoryRow(mk("plex://episode/aaa"), items)
+		ProcessHistoryRow(mk("plex://episode/bbb"), items)
+		ProcessHistoryRow(mk("plex://episode/aaa"), items) // duplicate: ignored
+		got := items["50"].EpisodeGUIDs
+		if want := []string{"plex://episode/aaa", "plex://episode/bbb"}; !slices.Equal(got, want) {
+			t.Errorf("EpisodeGUIDs = %v, want %v", got, want)
+		}
+	})
+
+	t.Run("episode GUIDs are capped per show", func(t *testing.T) {
+		items := map[string]TautulliEntry{}
+		for i := range maxEpisodeGUIDsPerShow + 3 {
+			row := &HistoryItem{
+				RatingKey: FlexInt(i + 1), GrandparentRatingKey: 50, Title: "Ep",
+				GrandparentTitle: "Show", Year: 2021, MediaType: Episode,
+				GUID: fmt.Sprintf("plex://episode/%d", i),
+			}
+			ProcessHistoryRow(row, items)
+		}
+		if got := len(items["50"].EpisodeGUIDs); got != maxEpisodeGUIDsPerShow {
+			t.Errorf("len(EpisodeGUIDs) = %d, want cap %d", got, maxEpisodeGUIDsPerShow)
+		}
+	})
+
+	t.Run("legacy episode GUID becomes show GUID and is not captured", func(t *testing.T) {
+		items := map[string]TautulliEntry{}
+		row := &HistoryItem{
+			RatingKey: 99, GrandparentRatingKey: 50, Title: "Ep",
+			GrandparentTitle: "Show", Year: 2021, MediaType: Episode,
+			GUID: "com.plexapp.agents.thetvdb://121361/6/1?lang=en",
+		}
+		if captured := ProcessHistoryRow(row, items); captured {
+			t.Error("legacy episode GUID should not be captured as an episode GUID")
+		}
+		entry := items["50"]
+		if entry.GUID != "tvdb://121361" {
+			t.Errorf("show GUID = %q, want tvdb://121361", entry.GUID)
+		}
+		if len(entry.EpisodeGUIDs) != 0 {
+			t.Errorf("EpisodeGUIDs = %v, want empty", entry.EpisodeGUIDs)
+		}
+	})
+
+	t.Run("later legacy row fills a show GUID left empty by a plex episode row", func(t *testing.T) {
+		items := map[string]TautulliEntry{}
+		ProcessHistoryRow(&HistoryItem{
+			RatingKey: 1, GrandparentRatingKey: 50, Title: "Ep1",
+			GrandparentTitle: "Show", Year: 2021, MediaType: Episode,
+			GUID: "plex://episode/aaa",
+		}, items)
+		ProcessHistoryRow(&HistoryItem{
+			RatingKey: 2, GrandparentRatingKey: 50, Title: "Ep2",
+			GrandparentTitle: "Show", Year: 2021, MediaType: Episode,
+			GUID: "thetvdb://121361/6/2",
+		}, items)
+		entry := items["50"]
+		if entry.GUID != "tvdb://121361" {
+			t.Errorf("show GUID = %q, want tvdb://121361 (filled by later legacy row)", entry.GUID)
+		}
+		if want := []string{"plex://episode/aaa"}; !slices.Equal(entry.EpisodeGUIDs, want) {
+			t.Errorf("EpisodeGUIDs = %v, want %v", entry.EpisodeGUIDs, want)
 		}
 	})
 
@@ -499,7 +600,7 @@ func TestMatchStaleItems(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			matched, unmatched := MatchStaleItems(tt.stale, tt.byGUID, tt.byTitleYear, tt.byTitle, tt.enableTY, tt.enableTO)
+			matched, unmatched := MatchStaleItems(tt.stale, nil, tt.byGUID, tt.byTitleYear, tt.byTitle, tt.enableTY, tt.enableTO)
 			for _, c := range tt.checks {
 				c(t, matched, unmatched)
 			}
@@ -541,7 +642,7 @@ func TestMatchOne_titleYearTakesPriorityOverTitleOnly(t *testing.T) {
 	item := &TautulliEntry{Title: "Dune", Year: "2020", MediaType: Movie}
 	byTitleYear := map[string]PlexEntry{"dune|2020|movie": {RatingKey: "200", Title: "Dune", Year: "2020", Type: Movie}}
 	byTitle := map[string]PlexEntry{"dune|movie": {RatingKey: "300", Title: "Dune", Year: "2021", Type: Movie}}
-	key, method := matchOne(item, "100", nil, byTitleYear, byTitle, true, true)
+	key, method := matchOne(item, "100", nil, nil, byTitleYear, byTitle, true, true)
 	if key != "200" {
 		t.Errorf("matchOne key = %q, want 200 (title+year must win over title-only)", key)
 	}
@@ -557,12 +658,33 @@ func TestMatchOne_titleOnlyMethodShowsYearTransition(t *testing.T) {
 	// regression that drops or swaps the years survives; pin the exact format.
 	item := &TautulliEntry{Title: "Dune", Year: "1984", MediaType: Movie}
 	byTitle := map[string]PlexEntry{"dune|movie": {RatingKey: "300", Title: "Dune", Year: "2021", Type: Movie}}
-	key, method := matchOne(item, "100", nil, nil, byTitle, true, true)
+	key, method := matchOne(item, "100", nil, nil, nil, byTitle, true, true)
 	if key != "300" {
 		t.Errorf("matchOne key = %q, want 300", key)
 	}
 	want := MatchMethod("title only (1984 -> 2021)")
 	if method != want {
 		t.Errorf("matchOne method = %q, want %q", method, want)
+	}
+}
+
+func TestMatchStaleItems_EpisodeGUIDResolution(t *testing.T) {
+	// A stale show carrying episode GUIDs that the orchestrator resolved to a
+	// current key must match via the episode-guid strategy, ahead of (and
+	// without needing) any title/year index entry.
+	stale := map[string]TautulliEntry{
+		"100": {
+			RatingKey: "100", Title: "Show", Year: "2021", MediaType: Show,
+			EpisodeGUIDs: []string{"plex://episode/aaa"},
+		},
+	}
+	resolved := map[string]string{"100": "200"}
+
+	matched, unmatched := MatchStaleItems(stale, resolved, nil, nil, nil, true, true)
+	if len(matched) != 1 || len(unmatched) != 0 {
+		t.Fatalf("matched=%d unmatched=%d, want 1/0", len(matched), len(unmatched))
+	}
+	if matched[0].NewKey != "200" || matched[0].Method != MethodEpisodeGUID {
+		t.Errorf("got (%q, %q), want (200, episode-guid)", matched[0].NewKey, matched[0].Method)
 	}
 }

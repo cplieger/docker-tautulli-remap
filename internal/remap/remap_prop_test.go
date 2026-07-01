@@ -117,7 +117,7 @@ func TestMatchStaleItems_partition_property(t *testing.T) {
 			}
 		}
 
-		matched, unmatched := MatchStaleItems(stale, byGUID, byTitleYear, byTitle, true, true)
+		matched, unmatched := MatchStaleItems(stale, nil, byGUID, byTitleYear, byTitle, true, true)
 
 		seen := map[string]bool{}
 		for _, m := range matched {

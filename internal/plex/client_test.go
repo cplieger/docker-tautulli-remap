@@ -516,3 +516,136 @@ func TestLibraryAll_RetriesTransientThenSucceeds(t *testing.T) {
 		t.Errorf("calls = %d, want 2 (one 503 then one 200, confirming LibraryAll retried the transient failure)", calls)
 	}
 }
+
+func TestResolveEpisodeShow(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/library/all" {
+			t.Errorf("unexpected path: %s", r.URL.Path)
+		}
+		if got := r.URL.Query().Get("guid"); got != "plex://episode/abc" {
+			t.Errorf("guid = %q, want plex://episode/abc", got)
+		}
+		if r.Header.Get("X-Plex-Token") != "tok" {
+			t.Error("missing token header")
+		}
+		fmt.Fprint(w, `{"MediaContainer":{"size":1,"Metadata":[{"type":"episode","grandparentRatingKey":"647130"}]}}`)
+	}))
+	defer srv.Close()
+
+	c := New(srv.URL, "tok", srv.Client())
+	got, err := c.ResolveEpisodeShow(context.Background(), "plex://episode/abc")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got != "647130" {
+		t.Errorf("got %q, want 647130", got)
+	}
+}
+
+func TestResolveEpisodeShow_NoMatch(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		fmt.Fprint(w, `{"MediaContainer":{"size":0}}`)
+	}))
+	defer srv.Close()
+
+	c := New(srv.URL, "tok", srv.Client())
+	got, err := c.ResolveEpisodeShow(context.Background(), "plex://episode/missing")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got != "" {
+		t.Errorf("got %q, want empty", got)
+	}
+}
+
+func TestResolveEpisodeShow_Ambiguous(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		fmt.Fprint(w, `{"MediaContainer":{"size":2,"Metadata":[{"grandparentRatingKey":"1"},{"grandparentRatingKey":"2"}]}}`)
+	}))
+	defer srv.Close()
+
+	c := New(srv.URL, "tok", srv.Client())
+	got, err := c.ResolveEpisodeShow(context.Background(), "plex://episode/dup")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got != "" {
+		t.Errorf("got %q, want empty (grandparents disagree)", got)
+	}
+}
+
+func TestResolveEpisodeShow_ConsistentDuplicates(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		fmt.Fprint(w, `{"MediaContainer":{"size":2,"Metadata":[{"grandparentRatingKey":"5"},{"grandparentRatingKey":"5"}]}}`)
+	}))
+	defer srv.Close()
+
+	c := New(srv.URL, "tok", srv.Client())
+	got, err := c.ResolveEpisodeShow(context.Background(), "plex://episode/x")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got != "5" {
+		t.Errorf("got %q, want 5", got)
+	}
+}
+
+func TestResolveEpisodeShow_NonNumericGrandparent(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		fmt.Fprint(w, `{"MediaContainer":{"size":1,"Metadata":[{"grandparentRatingKey":""}]}}`)
+	}))
+	defer srv.Close()
+
+	c := New(srv.URL, "tok", srv.Client())
+	got, err := c.ResolveEpisodeShow(context.Background(), "plex://episode/weird")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got != "" {
+		t.Errorf("got %q, want empty", got)
+	}
+}
+
+func TestResolveEpisodeShow_NotFound(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer srv.Close()
+
+	c := New(srv.URL, "tok", srv.Client())
+	got, err := c.ResolveEpisodeShow(context.Background(), "plex://episode/404")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got != "" {
+		t.Errorf("got %q, want empty", got)
+	}
+}
+
+func TestResolveEpisodeShow_ServerError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer srv.Close()
+
+	c := New(srv.URL, "tok", srv.Client())
+	if _, err := c.ResolveEpisodeShow(context.Background(), "plex://episode/err"); err == nil {
+		t.Fatal("expected error for HTTP 500")
+	}
+}
+
+func TestResolveEpisodeShow_EmptyGUID(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, _ *http.Request) {
+		t.Error("server must not be called for an empty GUID")
+	}))
+	defer srv.Close()
+
+	c := New(srv.URL, "tok", srv.Client())
+	got, err := c.ResolveEpisodeShow(context.Background(), "")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got != "" {
+		t.Errorf("got %q, want empty", got)
+	}
+}
