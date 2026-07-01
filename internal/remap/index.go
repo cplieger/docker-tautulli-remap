@@ -176,9 +176,8 @@ func BuildPlexIndex(ctx context.Context, plex PlexLibraryFetcher, parallelism in
 	var failed atomic.Int64
 
 	g, gctx := errgroup.WithContext(ctx)
-	if parallelism < 1 {
-		parallelism = 1 // errgroup.SetLimit(0) deadlocks; negative => unbounded
-	}
+	// errgroup.SetLimit(0) deadlocks; negative => unbounded.
+	parallelism = max(parallelism, 1)
 	g.SetLimit(parallelism)
 
 	for _, sec := range sections {

@@ -3,6 +3,7 @@
 package config
 
 import (
+	"cmp"
 	"log/slog"
 	"os"
 	"strings"
@@ -25,13 +26,13 @@ type Config struct {
 func Load() (*Config, error) {
 	interval := parseScheduleInterval(getEnv("SCHEDULE_INTERVAL", "off"))
 
-	apiKey := os.Getenv("TAUTULLI_APIKEY")
-	if apiKey == "" {
-		return nil, &MissingEnvError{Key: "TAUTULLI_APIKEY"}
+	apiKey, err := requireSecret("TAUTULLI_APIKEY")
+	if err != nil {
+		return nil, err
 	}
-	token := os.Getenv("PLEX_TOKEN")
-	if token == "" {
-		return nil, &MissingEnvError{Key: "PLEX_TOKEN"}
+	token, err := requireSecret("PLEX_TOKEN")
+	if err != nil {
+		return nil, err
 	}
 
 	return &Config{
@@ -96,11 +97,24 @@ func (e *MissingEnvError) Error() string {
 	return "required environment variable is missing: " + e.Key
 }
 
-func getEnv(key, fallback string) string {
-	if v := os.Getenv(key); v != "" {
-		return v
+// requireSecret reads a required secret env var. It returns a MissingEnvError when
+// the var is unset/empty, and warns (while still returning the value) when the var
+// is present but only whitespace, since such a value fails upstream authentication.
+// The secret value itself is never logged.
+func requireSecret(key string) (string, error) {
+	v := os.Getenv(key)
+	if v == "" {
+		return "", &MissingEnvError{Key: key}
 	}
-	return fallback
+	if strings.TrimSpace(v) == "" {
+		slog.Warn("required secret is set but contains only whitespace; requests will fail authentication",
+			"key", key)
+	}
+	return v, nil
+}
+
+func getEnv(key, fallback string) string {
+	return cmp.Or(os.Getenv(key), fallback)
 }
 
 // getEnvBool parses a boolean env var with tolerant semantics.
