@@ -61,16 +61,22 @@ func TestItemExists_RejectsNonNumericKeys(t *testing.T) {
 	}
 }
 
-// TestItemExists_UnexpectedStatus pins FIX 6's fail-closed contract: a status
-// that is neither 200 nor 404 yields (false, non-nil error) so the caller does
-// not silently treat an unverifiable item as not-exists. 502/503 are retried
-// (transient) and 500/401 surface immediately, but all return an error.
+// TestItemExists_UnexpectedStatus pins the fail-closed contract: a status that
+// is neither 200 nor 404 yields (false, non-nil error) so the caller does not
+// silently treat an unverifiable item as not-exists. 502/503 are retried
+// (transient) and 500/401 surface immediately; a 3xx redirect that the client
+// surfaces rather than follows (production sets CheckRedirect to
+// ErrUseLastResponse, and a 3xx without a Location header is likewise not
+// followed) must also fail closed, since httpx.CheckHTTPStatus returns nil for
+// a 3xx and would otherwise leak (false, nil). All cases return an error.
 func TestItemExists_UnexpectedStatus(t *testing.T) {
 	statuses := []int{
 		http.StatusInternalServerError,
 		http.StatusServiceUnavailable,
 		http.StatusUnauthorized,
 		http.StatusBadGateway,
+		http.StatusMovedPermanently,
+		http.StatusFound,
 	}
 	for _, status := range statuses {
 		t.Run(fmt.Sprintf("status_%d", status), func(t *testing.T) {
@@ -388,6 +394,25 @@ func TestLibraryAll_InvalidURL(t *testing.T) {
 	}
 }
 
+func TestLibraryAll_RedirectStatusFailsClosed(t *testing.T) {
+	for _, status := range []int{http.StatusMovedPermanently, http.StatusFound} {
+		t.Run(fmt.Sprintf("status_%d", status), func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.WriteHeader(status)
+			}))
+			defer srv.Close()
+			c := New(srv.URL, "tok", srv.Client())
+			items, err := c.LibraryAll(context.Background(), "1")
+			if err == nil {
+				t.Errorf("expected non-nil error for status %d (fail-closed: an unclassified non-200 must not read as an empty section)", status)
+			}
+			if items != nil {
+				t.Errorf("expected nil items for status %d, got %v", status, items)
+			}
+		})
+	}
+}
+
 func TestItemExists_CancelledContext(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
@@ -647,5 +672,50 @@ func TestResolveEpisodeShow_EmptyGUID(t *testing.T) {
 	}
 	if got != "" {
 		t.Errorf("got %q, want empty", got)
+	}
+}
+
+func TestResolveEpisodeShow_InvalidJSON(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		fmt.Fprint(w, `not json`)
+	}))
+	defer srv.Close()
+
+	c := New(srv.URL, "tok", srv.Client())
+	got, err := c.ResolveEpisodeShow(context.Background(), "plex://episode/bad")
+	if err == nil {
+		t.Error("expected a parse error for a malformed guid-resolve body, got nil")
+	}
+	if got != "" {
+		t.Errorf("got %q, want empty on a parse failure", got)
+	}
+}
+
+func TestResolveEpisodeShow_ReadError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Length", "100")
+		w.WriteHeader(http.StatusOK)
+		fmt.Fprint(w, "short")
+	}))
+	defer srv.Close()
+
+	c := New(srv.URL, "tok", srv.Client())
+	got, err := c.ResolveEpisodeShow(context.Background(), "plex://episode/trunc")
+	if err == nil {
+		t.Error("expected a read error for a truncated guid-resolve body, got nil")
+	}
+	if got != "" {
+		t.Errorf("got %q, want empty on a read failure", got)
+	}
+}
+
+func TestResolveEpisodeShow_InvalidURL(t *testing.T) {
+	c := New("://invalid-url", "token", &http.Client{})
+	got, err := c.ResolveEpisodeShow(context.Background(), "plex://episode/x")
+	if err == nil {
+		t.Error("expected an error for an invalid URL, got nil")
+	}
+	if got != "" {
+		t.Errorf("got %q, want empty for an invalid URL", got)
 	}
 }
