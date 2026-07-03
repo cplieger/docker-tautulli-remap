@@ -3,7 +3,6 @@
 [![Image Size](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/cplieger/tautulli-remap/badges/size.json)](https://github.com/cplieger/tautulli-remap/pkgs/container/tautulli-remap)
 ![Platforms](https://img.shields.io/badge/platforms-amd64%20%7C%20arm64-blue)
 ![base: Distroless](https://img.shields.io/badge/base-Distroless_nonroot-4285F4?logo=google)
-[![Go Report Card](https://goreportcard.com/badge/github.com/cplieger/tautulli-remap)](https://goreportcard.com/report/github.com/cplieger/tautulli-remap)
 [![Test coverage](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/cplieger/tautulli-remap/badges/coverage.json)](https://github.com/cplieger/tautulli-remap/actions/workflows/coverage.yml)
 [![Mutation](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/cplieger/tautulli-remap/badges/mutation.json)](https://github.com/cplieger/tautulli-remap/issues?q=label%3Agremlins-tracker)
 [![OpenSSF Best Practices](https://www.bestpractices.dev/projects/13222/badge)](https://www.bestpractices.dev/projects/13222)
@@ -78,7 +77,7 @@ services:
 
 ### Recommended deployment with external scheduling
 
-Use `SCHEDULE_INTERVAL=off` (resident-idle) with an external scheduler like Ofelia:
+Use `SCHEDULE_INTERVAL=off` (resident-idle, one of the three [run modes](#why-this-design)) with an external scheduler like Ofelia:
 
 ```yaml
 services:
@@ -94,7 +93,7 @@ services:
       ofelia.job-exec.tautulli-remap.command: "/tautulli-remap trigger"
 ```
 
-This keeps the container healthy (passing healthchecks) while delegating scheduling to Ofelia — the recommended pattern for external scheduling.
+This keeps the container healthy (passing healthchecks) while delegating scheduling to Ofelia.
 
 ## Healthcheck
 
@@ -160,7 +159,7 @@ larger changes so the approach can be discussed before implementation.
 
 ## Disclaimer
 
-These images are built with care and follow security best practices, but they are intended for **homelab use**. No guarantees of fitness for production environments. Use at your own risk.
+This project is built with care and follows security best practices, but it is intended for personal / self-hosted use. No guarantees of fitness for production environments. Use at your own risk.
 
 This project was built with AI-assisted tooling using [Claude Opus](https://www.anthropic.com/claude) and [Kiro](https://kiro.dev). The human maintainer defines architecture, supervises implementation, and makes all final decisions.
 
