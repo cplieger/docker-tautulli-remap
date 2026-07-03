@@ -92,7 +92,7 @@ func doTrigger() int {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	// NOTE: no marker.Cleanup() here. In the homelab the resident-idle main
+	// NOTE: no marker.Cleanup() here. In resident-idle mode the main
 	// process owns /tmp/.healthy; this trigger runs as a separate `docker exec`
 	// against the same file, so it only updates the marker to reflect the run's
 	// outcome — deleting it would mark the resident container unhealthy.
