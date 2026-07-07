@@ -11,10 +11,6 @@ import (
 	"os/signal"
 	"syscall"
 	"time"
-	// Embed the IANA tz database so TZ (default Europe/Paris) is honored even
-	// though the distroless static base ships no /usr/share/zoneinfo; without
-	// it time.Local silently falls back to UTC.
-	_ "time/tzdata"
 
 	"github.com/cplieger/health"
 	appconfig "github.com/cplieger/tautulli-remap/internal/config"
@@ -30,7 +26,7 @@ var (
 )
 
 func main() {
-	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo})))
+	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo, ReplaceAttr: utcTimeAttr})))
 
 	if len(os.Args) > 1 {
 		switch os.Args[1] {
@@ -146,4 +142,16 @@ func buildOrchestrator(cfg *appconfig.Config) *orchestrator.Orchestrator {
 	plexClient := plex.New(cfg.PlexURL, cfg.PlexToken, httpClient)
 	tautulliClient := tautulli.New(cfg.TautulliURL, cfg.TautulliAPIKey, httpClient)
 	return orchestrator.New(plexClient, tautulliClient, cfg)
+}
+
+// utcTimeAttr is a slog ReplaceAttr that renders the record's built-in time
+// key in UTC, so log-line timestamps are zone-stable regardless of the
+// container's TZ (the fleet logs-in-UTC standard). It rewrites only the
+// top-level time attribute; a user attribute that happens to share the "time"
+// key inside a group is left untouched.
+func utcTimeAttr(groups []string, a slog.Attr) slog.Attr {
+	if len(groups) == 0 && a.Key == slog.TimeKey && a.Value.Kind() == slog.KindTime {
+		a.Value = slog.TimeValue(a.Value.Time().UTC())
+	}
+	return a
 }

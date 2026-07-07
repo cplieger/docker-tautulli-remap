@@ -6,7 +6,6 @@ services:
     restart: unless-stopped
 
     environment:
-      TZ: "Europe/Paris"
       TAUTULLI_URL: "http://tautulli:8181"
       TAUTULLI_APIKEY: "your-tautulli-apikey"  # required
       PLEX_URL: "http://plex:32400"
