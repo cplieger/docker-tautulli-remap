@@ -43,7 +43,6 @@ services:
     user: "1000:1000"  # match your host user
 
     environment:
-      TZ: "Europe/Paris"
       TAUTULLI_URL: "http://tautulli:8181"
       TAUTULLI_APIKEY: "your-tautulli-apikey"
       PLEX_URL: "http://plex:32400"
@@ -58,7 +57,6 @@ services:
 
 | Variable              | Description                                                                                                                                       | Default                | Required |
 | --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------- | -------- |
-| `TZ`                  | Container timezone                                                                                                                                | `Europe/Paris`         | No       |
 | `TAUTULLI_URL`        | Tautulli instance URL (Docker DNS name or LAN IP)                                                                                                 | `http://tautulli:8181` | No       |
 | `TAUTULLI_APIKEY`     | Tautulli API key (Settings → Web Interface → API Key)                                                                                             | -                      | Yes      |
 | `PLEX_URL`            | Plex Media Server URL (Docker DNS name or LAN IP)                                                                                                 | `http://plex:32400`    | No       |
