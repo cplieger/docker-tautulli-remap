@@ -1,35 +1,59 @@
 #!/bin/sh
-# Runtime image smoke test for tautulli-remap. Invoked by the central CI docker job:
-#   sh tests/image-smoke.sh <image-ref>
+# Runtime image smoke-test harness — CANONICAL COPY in cplieger/ci
+# (configs/image-smoke.sh), synced to each serving app's tests/image-smoke.sh
+# by scripts/classify-repos.sh (a repo enrolls by committing a
+# tests/image-smoke.conf; see below). DO NOT edit the synced copy in an app
+# repo — change it here and let the sync land it.
 #
-# Starts the assembled distroless image with its default ENTRYPOINT
-# (["/tautulli-remap"], no subcommand), which lands in resident-idle mode:
-# internal/config parseScheduleInterval defaults SCHEDULE_INTERVAL to "off" -> 0
-# (getEnv("SCHEDULE_INTERVAL", "off")), so main() takes the ScheduleInterval == 0
-# branch, sets the /tmp/.healthy marker (marker.Set(true)) and idles on
-# <-ctx.Done(). Critically it does this WITHOUT any network call: config.Load()
-# only reads env, and buildOrchestrator only constructs the http/plex/tautulli
-# clients (plex.New / tautulli.New / orchestrator.New just store fields). The app
-# dials Tautulli/Plex only on an external "trigger" (or in scheduled mode), so a
-# resident-idle container reaches "healthy" with no live Tautulli or Plex.
+# Invoked by the shared CI docker job:  sh tests/image-smoke.sh <image-ref>
 #
-# Waiting for the container's own HEALTHCHECK (["/tautulli-remap","health"],
-# which probes the /tmp/.healthy marker) to report "healthy" therefore proves the
-# shipped image genuinely runs: the static binary executes in the real distroless
-# base, the nonroot user can write the /tmp marker, and the health-subcommand
-# dispatch + HEALTHCHECK contract work end to end.
+# It starts the assembled image and waits for the container's own HEALTHCHECK
+# to report "healthy" — proving the binary runs in the final image, loads its
+# config, binds any listener, and its health probe works, catching failures the
+# build cannot see (a broken //go:embed frontend, a missing runtime dependency,
+# a server that never binds, a broken HEALTHCHECK). It fails fast on an early
+# exit (a crash-boot is reported by its exit code, more debuggable than
+# "unhealthy") and dumps the container log tail only on failure.
 #
-# config.Load() requires non-empty TAUTULLI_APIKEY and PLEX_TOKEN (requireSecret
-# returns MissingEnvError -> main() logs and os.Exit(1) if either is unset/empty),
-# so we pass dummy values; resident-idle never authenticates with them, so no real
-# credentials and no live services are needed. SCHEDULE_INTERVAL=off is already
-# the unset default but is passed explicitly so this test stays correct if that
-# default ever changes.
+# Per-app knobs come from tests/image-smoke.conf beside this script; everything
+# below the config block is identical across apps. The .conf is a POSIX-sh
+# fragment sourced for these variables (all optional):
+#
+#   SMOKE_APP_NAME   label for log lines + container name (default: "image")
+#   SMOKE_TIMEOUT    seconds to wait for "healthy" (default: 120). Size it to
+#                    cover the image's HEALTHCHECK start-period plus a couple of
+#                    intervals; a slow-but-OK cold boot must not be failed early.
+#   SMOKE_RUN_ARGS   extra `docker run` args (env, tmpfs, ...) as a word-split
+#                    string, e.g. "-e FOO=bar --tmpfs /input". Values must not
+#                    contain spaces (these are controlled test configs).
+#
+# The harness also exports $SMOKE_DIR (this script's own absolute directory)
+# before sourcing the .conf, so an app that needs a config/fixture file on disk
+# can bind-mount a committed fixture dir, e.g.:
+#   SMOKE_RUN_ARGS="-e SYNC_INTERVAL=off -v ${SMOKE_DIR}/fixtures:/config:ro"
 set -eu
 
 IMG="${1:?usage: image-smoke.sh <image-ref>}"
-NAME="smoke-tautulli-remap-$$"
-TIMEOUT=90 # covers the HEALTHCHECK start-period (15s) + a few 30s intervals
+
+# Absolute directory of this script (also holds image-smoke.conf and any per-app
+# fixtures). Exposed to the .conf as $SMOKE_DIR so a .conf can bind-mount a
+# committed fixture dir with an absolute source path (docker -v requires one).
+SMOKE_DIR=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
+
+# Per-app config lives beside this script (repo-local, NOT synced). Pre-set the
+# knobs so `set -u` is safe and a repo with no .conf still runs with defaults.
+SMOKE_APP_NAME=""
+SMOKE_TIMEOUT=""
+SMOKE_RUN_ARGS=""
+CONF="$SMOKE_DIR/image-smoke.conf"
+if [ -f "$CONF" ]; then
+  # shellcheck disable=SC1090  # per-app config path, resolved at runtime
+  . "$CONF"
+fi
+
+APP="${SMOKE_APP_NAME:-image}"
+TIMEOUT="${SMOKE_TIMEOUT:-120}"
+NAME="smoke-${APP}-$$"
 
 # shellcheck disable=SC2317,SC2329  # invoked indirectly via trap
 cleanup() {
@@ -43,13 +67,9 @@ cleanup() {
 }
 trap cleanup EXIT
 
-# Dummy creds satisfy config.Load()'s requireSecret (must be non-empty);
-# SCHEDULE_INTERVAL=off selects resident-idle (the default when unset).
-docker run -d --name "$NAME" \
-  -e TAUTULLI_APIKEY=dummy-smoke-key \
-  -e PLEX_TOKEN=dummy-smoke-token \
-  -e SCHEDULE_INTERVAL=off \
-  "$IMG" >/dev/null
+# SMOKE_RUN_ARGS is intentionally word-split (simple test args, no spaces).
+# shellcheck disable=SC2086
+docker run -d --name "$NAME" $SMOKE_RUN_ARGS "$IMG" >/dev/null
 
 i=0
 status=starting
@@ -59,17 +79,17 @@ while [ "$i" -lt "$TIMEOUT" ]; do
   # and the verdict never depends on what health a stopped container reports.
   if [ "$(docker inspect --format '{{ .State.Running }}' "$NAME" 2>/dev/null || echo missing)" != "true" ]; then
     ec=$(docker inspect --format '{{ .State.ExitCode }}' "$NAME" 2>/dev/null || echo '?')
-    printf 'FAIL: tautulli-remap container exited early (exit code %s)\n' "$ec" >&2
+    printf 'FAIL: %s container exited early (exit code %s)\n' "$APP" "$ec" >&2
     exit 1
   fi
   status=$(docker inspect --format '{{ if .State.Health }}{{ .State.Health.Status }}{{ else }}no-healthcheck{{ end }}' "$NAME" 2>/dev/null || echo gone)
   case "$status" in
     healthy)
-      printf 'tautulli-remap image smoke: ok (healthy after %ss)\n' "$i"
+      printf '%s image smoke: ok (healthy after %ss)\n' "$APP" "$i"
       exit 0
       ;;
     unhealthy)
-      printf 'FAIL: tautulli-remap reported unhealthy\n' >&2
+      printf 'FAIL: %s reported unhealthy\n' "$APP" >&2
       exit 1
       ;;
     no-healthcheck)
@@ -77,12 +97,12 @@ while [ "$i" -lt "$TIMEOUT" ]; do
       exit 1
       ;;
     gone)
-      printf 'FAIL: tautulli-remap container is gone\n' >&2
+      printf 'FAIL: %s container is gone\n' "$APP" >&2
       exit 1
       ;;
   esac
   i=$((i + 1))
   sleep 1
 done
-printf 'FAIL: tautulli-remap did not become healthy within %ss (last status: %s)\n' "$TIMEOUT" "$status" >&2
+printf 'FAIL: %s did not become healthy within %ss (last status: %s)\n' "$APP" "$TIMEOUT" "$status" >&2
 exit 1
