@@ -109,7 +109,7 @@ enough to catch formatting drift; `golangci-lint fmt` fixes it.
   a deliberate supply-chain choice.
 - **Structured logging is key-value only.** `sloglint` runs with `kv-only`,
   so every `slog` call must use `slog.Info("msg", "key", val)` form — no
-  attribute helpers; timestamps are UTC via a `utcTimeAttr` `ReplaceAttr`, so the image needs no `TZ` and embeds no `time/tzdata`. Match the existing log shape.
+  attribute helpers; timestamps are UTC via `slogx` (its `UTCTime` `ReplaceAttr`), so the image needs no `TZ` and embeds no `time/tzdata`. Match the existing log shape.
 - **Lint is strict.** `gocyclo` trips at complexity 15; `gosec`, `gocritic`,
   `revive`, and friends are enabled. `gofumpt` runs with `extra-rules`
   (grouped same-type params, no naked returns).
