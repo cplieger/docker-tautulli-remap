@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/cplieger/health"
+	"github.com/cplieger/httpx/v2"
 	"github.com/cplieger/slogx"
 	appconfig "github.com/cplieger/tautulli-remap/internal/config"
 	"github.com/cplieger/tautulli-remap/internal/orchestrator"
@@ -48,14 +49,18 @@ func main() {
 	}
 	appconfig.LogConfig(cfg)
 
+	orch, err := buildOrchestrator(cfg)
+	if err != nil {
+		slog.Error("failed to build Plex client", "error", err)
+		os.Exit(1)
+	}
+
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
 	marker := health.NewMarker(health.DefaultPath)
 	marker.Set(false)
 	defer marker.Cleanup()
-
-	orch := buildOrchestrator(cfg)
 
 	if cfg.ScheduleInterval > 0 {
 		orch.RunScheduler(ctx, marker.Set)
@@ -95,7 +100,11 @@ func doTrigger() int {
 	// outcome — deleting it would mark the resident container unhealthy.
 	marker := health.NewMarker(health.DefaultPath)
 
-	orch := buildOrchestrator(cfg)
+	orch, err := buildOrchestrator(cfg)
+	if err != nil {
+		slog.Error("failed to build Plex client", "error", err)
+		return 1
+	}
 
 	ok := orch.Run(ctx)
 	return finishTrigger(ctx, ok, marker.Set)
@@ -131,16 +140,19 @@ func finishTrigger(ctx context.Context, ok bool, setHealthy func(bool)) int {
 	return 0
 }
 
-// buildOrchestrator constructs the shared HTTP client and the Plex,
-// Tautulli, and Orchestrator instances from cfg.
-func buildOrchestrator(cfg *appconfig.Config) *orchestrator.Orchestrator {
-	httpClient := &http.Client{
-		Timeout: 2 * time.Minute,
-		CheckRedirect: func(_ *http.Request, _ []*http.Request) error {
-			return http.ErrUseLastResponse
-		},
+// buildOrchestrator constructs the Plex, Tautulli, and Orchestrator
+// instances from cfg. The Plex client (plexapi) owns its own hardened
+// transport; Tautulli keeps the app-built one (2-minute total budget,
+// refuse-all redirects so the API key never rides a hostile 3xx).
+func buildOrchestrator(cfg *appconfig.Config) (*orchestrator.Orchestrator, error) {
+	plexClient, err := plex.New(cfg.PlexURL, cfg.PlexToken)
+	if err != nil {
+		return nil, err
 	}
-	plexClient := plex.New(cfg.PlexURL, cfg.PlexToken, httpClient)
+	httpClient := &http.Client{
+		Timeout:       2 * time.Minute,
+		CheckRedirect: httpx.RefuseAllRedirects,
+	}
 	tautulliClient := tautulli.New(cfg.TautulliURL, cfg.TautulliAPIKey, httpClient)
-	return orchestrator.New(plexClient, tautulliClient, cfg)
+	return orchestrator.New(plexClient, tautulliClient, cfg), nil
 }
