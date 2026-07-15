@@ -1,7 +1,11 @@
+github.com/cplieger/envx v1.0.0 h1:amAnEy+LrJDSlczo1N71UqB9zdRMlsOmBO2uwqop5EY=
+github.com/cplieger/envx v1.0.0/go.mod h1:OA7MSc3ChDXYZgIlHkABJZWt5FqUtr66yWBISLUvq20=
 github.com/cplieger/health v1.1.7 h1:JOudsXytw3sH/DDRQ5t1/JQtBPAe1Q91XPrA1qizZlE=
 github.com/cplieger/health v1.1.7/go.mod h1:15Lm3XhPMU3nCEDfIH2hVAz6TXH06Wwiz9tgBi71vEE=
 github.com/cplieger/httpx/v2 v2.5.0 h1:lTFxDAT/4ijZ7wzaFPipipEpnHvv7ABKswB0NuUjLpg=
 github.com/cplieger/httpx/v2 v2.5.0/go.mod h1:Q3ulXhfiO40EGxIVofnz2KdJY1X3MSKZTwYhv/pL9W0=
+github.com/cplieger/plexapi v1.1.1 h1:ONkbV7pUULN3Yrv6VQe19mzAWarl5xEUkPFhmialk4I=
+github.com/cplieger/plexapi v1.1.1/go.mod h1:cT6WvuQ0iSGhBesgjLLYUA2VrpQB4E7XjJcuzJy1eCI=
 github.com/cplieger/slogx v1.1.1 h1:GNlwUtowLx1BbRAVpaYFlMcTMKW7q+Heh2guay1wDhI=
 github.com/cplieger/slogx v1.1.1/go.mod h1:15KA2NVx725imQe/PYXUmd3oM2oMpYpqwU+hdHtz7Fc=
 golang.org/x/sync v0.22.0 h1:SZjpbeLmrCk4xhRSZFNZW5gFUeCeFgjekvI/+gfScek=

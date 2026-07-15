@@ -2,11 +2,13 @@ package config
 
 import (
 	"bytes"
-	"fmt"
+	"errors"
 	"log/slog"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/cplieger/envx"
 )
 
 func TestLoad(t *testing.T) {
@@ -96,45 +98,16 @@ func TestLoad_MissingRequiredEnv(t *testing.T) {
 			t.Setenv("PLEX_TOKEN", tt.plexToken)
 
 			_, err := Load()
-			merr, ok := err.(*MissingEnvError)
+			var merr *envx.MissingError
+			ok := errors.As(err, &merr)
 			if !ok {
-				t.Fatalf("Load() error = %v (%T), want *MissingEnvError", err, err)
+				t.Fatalf("Load() error = %v (%T), want *envx.MissingError", err, err)
 			}
 			if merr.Key != tt.wantKey {
-				t.Errorf("MissingEnvError.Key = %q, want %q", merr.Key, tt.wantKey)
+				t.Errorf("MissingError.Key = %q, want %q", merr.Key, tt.wantKey)
 			}
 			if !strings.Contains(err.Error(), tt.wantKey) {
 				t.Errorf("error message %q does not mention %q", err.Error(), tt.wantKey)
-			}
-		})
-	}
-}
-
-func TestGetEnvBool(t *testing.T) {
-	tests := []struct {
-		value      string
-		defaultVal bool
-		want       bool
-	}{
-		{"true", false, true},
-		{"1", false, true},
-		{"yes", false, true},
-		{"on", false, true},
-		{"false", true, false},
-		{"0", true, false},
-		{"no", true, false},
-		{"off", true, false},
-		{"", true, true},
-		{"", false, false},
-		{"maybe", true, true},
-		{"maybe", false, false},
-	}
-	for _, tt := range tests {
-		t.Run(fmt.Sprintf("%q_default=%v", tt.value, tt.defaultVal), func(t *testing.T) {
-			t.Setenv("TEST_BOOL", tt.value)
-			got := getEnvBool("TEST_BOOL", tt.defaultVal)
-			if got != tt.want {
-				t.Errorf("getEnvBool(%q, %v) = %v, want %v", tt.value, tt.defaultVal, got, tt.want)
 			}
 		})
 	}
@@ -286,39 +259,6 @@ func TestLogConfig_neverLogsSecrets(t *testing.T) {
 	}
 	if strings.Contains(logs, token) {
 		t.Errorf("LogConfig leaked the Plex token into logs: %q", logs)
-	}
-}
-
-func TestGetEnvBool_normalizesInputAndWarns(t *testing.T) {
-	tests := []struct {
-		name       string
-		value      string
-		defaultVal bool
-		want       bool
-		wantWarn   bool
-	}{
-		{"uppercase TRUE with surrounding spaces", " TRUE ", false, true, false},
-		{"mixed-case False with spaces", "  False  ", true, false, false},
-		{"capitalized Yes", "Yes", false, true, false},
-		{"uppercase ON", "ON", false, true, false},
-		{"capitalized No", "No", true, false, false},
-		{"uppercase OFF", "OFF", true, false, false},
-		{"unrecognized value warns, returns default true", "maybe", true, true, true},
-		{"unrecognized value warns, returns default false", "perhaps", false, false, true},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			getLogs := captureLogs(t)
-			t.Setenv("TEST_BOOL", tt.value)
-			got := getEnvBool("TEST_BOOL", tt.defaultVal)
-			if got != tt.want {
-				t.Errorf("getEnvBool(%q, %v) = %v, want %v", tt.value, tt.defaultVal, got, tt.want)
-			}
-			warned := strings.Contains(getLogs(), "unrecognized boolean value")
-			if warned != tt.wantWarn {
-				t.Errorf("getEnvBool(%q) warned = %v, want %v", tt.value, warned, tt.wantWarn)
-			}
-		})
 	}
 }
 

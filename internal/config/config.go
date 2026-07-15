@@ -3,11 +3,11 @@
 package config
 
 import (
-	"cmp"
 	"log/slog"
-	"os"
 	"strings"
 	"time"
+
+	"github.com/cplieger/envx"
 )
 
 // Config holds the application configuration.
@@ -24,7 +24,7 @@ type Config struct {
 
 // Load parses environment variables and returns the configuration.
 func Load() (*Config, error) {
-	interval := parseScheduleInterval(getEnv("SCHEDULE_INTERVAL", "off"))
+	interval := parseScheduleInterval(envx.String("SCHEDULE_INTERVAL", "off"))
 
 	apiKey, err := requireSecret("TAUTULLI_APIKEY")
 	if err != nil {
@@ -36,14 +36,14 @@ func Load() (*Config, error) {
 	}
 
 	return &Config{
-		TautulliURL:       getEnv("TAUTULLI_URL", "http://tautulli:8181"),
+		TautulliURL:       envx.String("TAUTULLI_URL", "http://tautulli:8181"),
 		TautulliAPIKey:    apiKey,
-		PlexURL:           getEnv("PLEX_URL", "http://plex:32400"),
+		PlexURL:           envx.String("PLEX_URL", "http://plex:32400"),
 		PlexToken:         token,
 		ScheduleInterval:  interval,
-		DryRun:            getEnvBool("DRY_RUN", true),
-		FallbackTitleYear: getEnvBool("FALLBACK_TITLE_YEAR", true),
-		FallbackTitleOnly: getEnvBool("FALLBACK_TITLE_ONLY", false),
+		DryRun:            envx.Bool("DRY_RUN", true),
+		FallbackTitleYear: envx.Bool("FALLBACK_TITLE_YEAR", true),
+		FallbackTitleOnly: envx.Bool("FALLBACK_TITLE_ONLY", false),
 	}, nil
 }
 
@@ -88,49 +88,19 @@ func LogConfig(cfg *Config) {
 	)
 }
 
-// MissingEnvError indicates a required environment variable is not set.
-type MissingEnvError struct {
-	Key string
-}
-
-func (e *MissingEnvError) Error() string {
-	return "required environment variable is missing: " + e.Key
-}
-
-// requireSecret reads a required secret env var. It returns a MissingEnvError when
-// the var is unset/empty, and warns (while still returning the value) when the var
-// is present but only whitespace, since such a value fails upstream authentication.
-// The secret value itself is never logged.
+// requireSecret reads a required secret env var via envx.Require (unset or
+// empty yields *envx.MissingError), adding the app's whitespace-only
+// warning: such a value fails upstream authentication, so it is worth
+// flagging while still returning it. The secret value itself is never
+// logged.
 func requireSecret(key string) (string, error) {
-	v := os.Getenv(key)
-	if v == "" {
-		return "", &MissingEnvError{Key: key}
+	v, err := envx.Require(key)
+	if err != nil {
+		return "", err
 	}
 	if strings.TrimSpace(v) == "" {
 		slog.Warn("required secret is set but contains only whitespace; requests will fail authentication",
 			"key", key)
 	}
 	return v, nil
-}
-
-func getEnv(key, fallback string) string {
-	return cmp.Or(os.Getenv(key), fallback)
-}
-
-// getEnvBool parses a boolean env var with tolerant semantics.
-func getEnvBool(key string, defaultVal bool) bool {
-	v := os.Getenv(key)
-	if v == "" {
-		return defaultVal
-	}
-	switch strings.ToLower(strings.TrimSpace(v)) {
-	case "true", "1", "yes", "on":
-		return true
-	case "false", "0", "no", "off":
-		return false
-	default:
-		slog.Warn("unrecognized boolean value, using default",
-			"key", key, "value", v, "default", defaultVal)
-		return defaultVal
-	}
 }

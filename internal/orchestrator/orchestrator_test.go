@@ -86,7 +86,10 @@ func testServer(t *testing.T, handler http.HandlerFunc) *config.Config {
 
 func newOrch(t *testing.T, cfg *config.Config) *Orchestrator {
 	t.Helper()
-	pc := plex.New(cfg.PlexURL, cfg.PlexToken, &http.Client{})
+	pc, perr := plex.New(cfg.PlexURL, cfg.PlexToken)
+	if perr != nil {
+		t.Fatalf("plex.New: %v", perr)
+	}
 	tc := tautulli.New(cfg.TautulliURL, cfg.TautulliAPIKey, &http.Client{})
 	tc.RetryDelayUnit = time.Millisecond
 	o := New(pc, tc, cfg)
@@ -410,7 +413,10 @@ func TestBuildPlexIndex_AllThreeIndexes(t *testing.T) {
 			w.WriteHeader(http.StatusNotFound)
 		}
 	})
-	pc := plex.New(cfg.PlexURL, cfg.PlexToken, &http.Client{})
+	pc, perr := plex.New(cfg.PlexURL, cfg.PlexToken)
+	if perr != nil {
+		t.Fatalf("plex.New: %v", perr)
+	}
 	byGUID, byTitleYear, byTitle, failed := remap.BuildPlexIndex(context.Background(), pc, 8)
 	if failed != 0 {
 		t.Errorf("failedSections = %d, want 0 (all scanned sections returned 200)", failed)
@@ -450,7 +456,10 @@ func TestBuildPlexIndex_SkipsNonMovieShowSections(t *testing.T) {
 			w.WriteHeader(http.StatusNotFound)
 		}
 	})
-	pc := plex.New(cfg.PlexURL, cfg.PlexToken, &http.Client{})
+	pc, perr := plex.New(cfg.PlexURL, cfg.PlexToken)
+	if perr != nil {
+		t.Fatalf("plex.New: %v", perr)
+	}
 	byGUID, byTitleYear, byTitle, failed := remap.BuildPlexIndex(context.Background(), pc, 8)
 	if failed != 0 {
 		t.Errorf("failedSections = %d, want 0 (non-movie/show sections are skipped, not failed)", failed)
@@ -476,7 +485,10 @@ func TestBuildPlexIndex_CancelBetweenSections(t *testing.T) {
 			w.Write([]byte(`{"MediaContainer":{"Metadata":[]}}`))
 		}
 	})
-	pc := plex.New(cfg.PlexURL, cfg.PlexToken, &http.Client{})
+	pc, perr := plex.New(cfg.PlexURL, cfg.PlexToken)
+	if perr != nil {
+		t.Fatalf("plex.New: %v", perr)
+	}
 	byGUID, byTitleYear, byTitle, _ := remap.BuildPlexIndex(ctx, pc, 1)
 	if got := sectionAllHits.Load(); got != 1 {
 		t.Errorf("expected 1 section fetch before cancel, got %d", got)
