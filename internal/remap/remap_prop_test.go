@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/cplieger/runesafe"
 	"pgregory.net/rapid"
 )
 
@@ -93,7 +94,7 @@ func TestMatchStaleItems_partition_property(t *testing.T) {
 
 		for i := range n {
 			key := strconv.Itoa(100 + i)
-			title := rapid.StringMatching(`[A-Za-z ]{1,20}`).Draw(t, fmt.Sprintf("title_%d", i))
+			title := runesafe.Untrusted(rapid.StringMatching(`[A-Za-z ]{1,20}`).Draw(t, fmt.Sprintf("title_%d", i)))
 			year := strconv.Itoa(rapid.IntRange(1990, 2025).Draw(t, fmt.Sprintf("year_%d", i)))
 			mediaType := MediaType(rapid.SampledFrom([]string{"movie", "show"}).Draw(t, fmt.Sprintf("type_%d", i)))
 			guid := ""
@@ -106,7 +107,7 @@ func TestMatchStaleItems_partition_property(t *testing.T) {
 				newKey := strconv.Itoa(200 + i)
 				byGUID[guid] = PlexEntry{RatingKey: newKey, Title: title, Year: year, Type: mediaType}
 			}
-			t2 := strings.ToLower(strings.TrimSpace(title))
+			t2 := strings.ToLower(strings.TrimSpace(title.Raw()))
 			if t2 != "" && rapid.Bool().Draw(t, fmt.Sprintf("in_ty_map_%d", i)) {
 				newKey := strconv.Itoa(300 + i)
 				byTitleYear[titleYearKey(t2, year, mediaType)] = PlexEntry{RatingKey: newKey, Title: title, Year: year, Type: mediaType}
@@ -157,10 +158,10 @@ func TestProcessHistoryRow_never_removes_entries(t *testing.T) {
 		nExisting := rapid.IntRange(0, 5).Draw(t, "n_existing")
 		for i := range nExisting {
 			key := strconv.Itoa(i + 1)
-			items[key] = TautulliEntry{RatingKey: key, Title: fmt.Sprintf("Existing %d", i), Year: "2020", MediaType: Movie}
+			items[key] = TautulliEntry{RatingKey: key, Title: runesafe.Untrusted(fmt.Sprintf("Existing %d", i)), Year: "2020", MediaType: Movie}
 		}
 		beforeLen := len(items)
-		beforeKeys := map[string]string{}
+		beforeKeys := map[string]runesafe.Untrusted{}
 		for k, v := range items {
 			beforeKeys[k] = v.Title
 		}
@@ -169,8 +170,8 @@ func TestProcessHistoryRow_never_removes_entries(t *testing.T) {
 		row := &HistoryItem{
 			RatingKey:            FlexInt(rapid.IntRange(-1, 10).Draw(t, "rk")),
 			GrandparentRatingKey: FlexInt(rapid.IntRange(-1, 10).Draw(t, "grk")),
-			Title:                rapid.StringMatching(`[A-Za-z ]{0,15}`).Draw(t, "title"),
-			GrandparentTitle:     rapid.StringMatching(`[A-Za-z ]{0,15}`).Draw(t, "gp_title"),
+			Title:                runesafe.Untrusted(rapid.StringMatching(`[A-Za-z ]{0,15}`).Draw(t, "title")),
+			GrandparentTitle:     runesafe.Untrusted(rapid.StringMatching(`[A-Za-z ]{0,15}`).Draw(t, "gp_title")),
 			Year:                 FlexInt(rapid.IntRange(2000, 2025).Draw(t, "year")),
 			MediaType:            mediaType,
 			GUID:                 rapid.SampledFrom([]string{"", "imdb://tt1234567", "plex://episode/abc", "local://123"}).Draw(t, "guid"),

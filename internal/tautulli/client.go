@@ -11,7 +11,7 @@ import (
 	"net/url"
 	"time"
 
-	"github.com/cplieger/httpx/v2"
+	"github.com/cplieger/httpx/v3"
 	"github.com/cplieger/tautulli-remap/internal/remap"
 )
 
@@ -117,7 +117,7 @@ func (c *Client) API(ctx context.Context, cmd string, extra url.Values) ([]byte,
 // is redacted from any returned error. Used for read commands; mutating
 // commands call API directly so they are never retried.
 func (c *Client) APIWithRetry(ctx context.Context, cmd string, extra url.Values) ([]byte, error) {
-	body, err := httpx.Retry(ctx, c.httpClient, c.requestURL(cmd, extra),
+	body, err := httpx.GetBytes(ctx, c.httpClient, c.requestURL(cmd, extra),
 		httpx.WithMaxAttempts(3),
 		httpx.WithBaseDelay(c.retryDelayUnit()),
 		httpx.WithMaxBodyBytes(maxTautulliBody),
@@ -178,6 +178,10 @@ func (c *Client) UpdateMetadata(ctx context.Context, oldKey, newKey string, medi
 }
 
 // DeleteRecentlyAdded clears all entries from Tautulli's recently-added table.
+// Deliberately table-wide: the Tautulli API's delete_recently_added has no
+// per-item or per-key variant, so clearing everything is the only way to
+// evict the stale entries a remap leaves behind (the upstream rating-key gist
+// does the same). Tautulli repopulates the table from Plex activity.
 func (c *Client) DeleteRecentlyAdded(ctx context.Context) error {
 	body, err := c.API(ctx, "delete_recently_added", nil)
 	if err != nil {

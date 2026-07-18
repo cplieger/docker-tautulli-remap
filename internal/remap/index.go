@@ -108,7 +108,7 @@ func (idx *plexIndex) add(li LibItem, mediaType MediaType) {
 		idx.byGUID[g] = entry
 	}
 
-	normalizedTitle := NormalizeTitle(li.Title)
+	normalizedTitle := NormalizeTitle(li.Title.Raw())
 	tyKey := titleYearKey(normalizedTitle, entry.Year, mediaType)
 	if prev, ok := idx.byTitleYear[tyKey]; ok && prev.RatingKey != entry.RatingKey {
 		slog.Warn("title+year index shadow; refusing to match this ambiguous slot",

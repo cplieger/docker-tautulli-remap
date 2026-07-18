@@ -7,12 +7,15 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/cplieger/runesafe"
 	"github.com/cplieger/tautulli-remap/internal/config"
 	"github.com/cplieger/tautulli-remap/internal/plex"
 	"github.com/cplieger/tautulli-remap/internal/remap"
@@ -63,6 +66,7 @@ func TestRun_DryRun_NoStale(t *testing.T) {
 	ft := &fakeTautulli{}
 	o := New(&fakePlex{}, ft, &config.Config{DryRun: true})
 	o.PaginationDelay = time.Millisecond
+	o.RunLockPath = filepath.Join(t.TempDir(), "remap.lock")
 	ok := o.Run(context.Background())
 	if !ok {
 		t.Error("expected success when all keys are valid")
@@ -94,6 +98,7 @@ func newOrch(t *testing.T, cfg *config.Config) *Orchestrator {
 	tc.RetryDelayUnit = time.Millisecond
 	o := New(pc, tc, cfg)
 	o.PaginationDelay = time.Millisecond
+	o.RunLockPath = filepath.Join(t.TempDir(), "remap.lock")
 	return o
 }
 
@@ -619,7 +624,7 @@ func TestApplyRemappings_AbortsAfterConsecutiveFailures(t *testing.T) {
 	matched := make([]remap.MatchResult, 15)
 	for i := range matched {
 		matched[i] = remap.MatchResult{
-			Title: fmt.Sprintf("Movie %d", i), Year: "2020",
+			Title: runesafe.Untrusted(fmt.Sprintf("Movie %d", i)), Year: "2020",
 			OldKey: strconv.Itoa(i), NewKey: strconv.Itoa(100 + i),
 			MediaType: remap.Movie, Method: remap.MethodGUID,
 		}
@@ -646,7 +651,9 @@ func TestClearRecentlyAdded_DryRun(t *testing.T) {
 	})
 	cfg.DryRun = true
 	orch := newOrch(t, cfg)
-	orch.ClearRecentlyAdded(context.Background())
+	if !orch.ClearRecentlyAdded(context.Background()) {
+		t.Error("ClearRecentlyAdded() = false in dry run, want true (nothing to fail)")
+	}
 	if calls != 0 {
 		t.Errorf("expected 0 API calls in dry run, got %d", calls)
 	}
@@ -663,7 +670,9 @@ func TestClearRecentlyAdded_Live(t *testing.T) {
 	})
 	cfg.DryRun = false
 	orch := newOrch(t, cfg)
-	orch.ClearRecentlyAdded(context.Background())
+	if !orch.ClearRecentlyAdded(context.Background()) {
+		t.Error("ClearRecentlyAdded() = false, want true on a successful clear")
+	}
 	if calls != 1 {
 		t.Errorf("expected 1 API call, got %d", calls)
 	}
@@ -675,7 +684,9 @@ func TestClearRecentlyAdded_HTTPError(t *testing.T) {
 	})
 	cfg.DryRun = false
 	orch := newOrch(t, cfg)
-	orch.ClearRecentlyAdded(context.Background())
+	if orch.ClearRecentlyAdded(context.Background()) {
+		t.Error("ClearRecentlyAdded() = true, want false when the API call fails (incomplete cleanup must be reported)")
+	}
 }
 
 func TestRun_AllKeysValid(t *testing.T) {
@@ -769,7 +780,70 @@ func TestRun_DryRunSkipsBackup(t *testing.T) {
 	}
 }
 
+// TestRun_NonDryRunCallsBackup pins the deferred-backup contract: a live run
+// with at least one mapping ready backs up Tautulli, and does so before the
+// first write (update_metadata_details).
 func TestRun_NonDryRunCallsBackup(t *testing.T) {
+	var mu sync.Mutex
+	var cmds []string
+	cfg := testServer(t, func(w http.ResponseWriter, r *http.Request) {
+		cmd := r.URL.Query().Get("cmd")
+		if cmd != "" {
+			mu.Lock()
+			cmds = append(cmds, cmd)
+			mu.Unlock()
+		}
+		switch {
+		case cmd == "get_history":
+			w.Write([]byte(`{"response":{"result":"success","data":{
+				"recordsFiltered":1,
+				"data":[{"rating_key":100,"title":"Stale Movie","year":2020,"media_type":"movie","guid":"imdb://tt1111111"}]
+			}}}`))
+		case cmd == "update_metadata_details" || cmd == "delete_recently_added":
+			w.Write([]byte(`{"response":{"result":"success"}}`))
+		case strings.HasSuffix(r.URL.Path, "/library/metadata/100"):
+			w.WriteHeader(http.StatusNotFound)
+		case strings.HasSuffix(r.URL.Path, "/library/sections"):
+			w.Write([]byte(`{"MediaContainer":{"Directory":[{"key":"1","title":"Movies","type":"movie"}]}}`))
+		case strings.Contains(r.URL.Path, "/sections/1/all"):
+			w.Write([]byte(`{"MediaContainer":{"Metadata":[
+				{"title":"Stale Movie","ratingKey":"200","year":2020,
+				 "guid":"plex://movie/x","Guid":[{"id":"imdb://tt1111111"}]}
+			]}}`))
+		default:
+			w.Write([]byte(`{}`))
+		}
+	})
+	cfg.DryRun = false
+	orch := newOrch(t, cfg)
+	if !orch.Run(context.Background()) {
+		t.Fatal("Run() = false, want true")
+	}
+	backupAt, updateAt := -1, -1
+	mu.Lock()
+	for i, c := range cmds {
+		if c == "backup_db" && backupAt < 0 {
+			backupAt = i
+		}
+		if c == "update_metadata_details" && updateAt < 0 {
+			updateAt = i
+		}
+	}
+	mu.Unlock()
+	if backupAt < 0 {
+		t.Fatal("backup_db not called on a live run with a mapping to apply")
+	}
+	if updateAt < 0 {
+		t.Fatal("update_metadata_details not called")
+	}
+	if backupAt > updateAt {
+		t.Errorf("backup_db called at index %d AFTER update_metadata_details at %d; backup must precede the first write", backupAt, updateAt)
+	}
+}
+
+// TestRun_LiveNoWorkSkipsBackup pins the other half of the deferred-backup
+// contract: a live run that finds nothing stale never spends a backup.
+func TestRun_LiveNoWorkSkipsBackup(t *testing.T) {
 	backupCalled := false
 	cfg := testServer(t, func(w http.ResponseWriter, r *http.Request) {
 		cmd := r.URL.Query().Get("cmd")
@@ -784,9 +858,50 @@ func TestRun_NonDryRunCallsBackup(t *testing.T) {
 	})
 	cfg.DryRun = false
 	orch := newOrch(t, cfg)
-	orch.Run(context.Background())
-	if !backupCalled {
-		t.Error("backup_db should be called when not in dry run")
+	if !orch.Run(context.Background()) {
+		t.Fatal("Run() = false, want true when nothing is stale")
+	}
+	if backupCalled {
+		t.Error("backup_db called on a live run with nothing to remap; backup is deferred until a mapping is ready")
+	}
+}
+
+// TestRun_LiveStaleUnmatchedSkipsBackup exercises the backup gate itself: a
+// stale item that no strategy matches leaves zero mappings, so the run
+// completes (successfully) without ever calling backup_db.
+func TestRun_LiveStaleUnmatchedSkipsBackup(t *testing.T) {
+	backupCalled := false
+	cfg := testServer(t, func(w http.ResponseWriter, r *http.Request) {
+		cmd := r.URL.Query().Get("cmd")
+		switch {
+		case cmd == "backup_db":
+			backupCalled = true
+			w.Write([]byte(`{}`))
+		case cmd == "get_history":
+			w.Write([]byte(`{"response":{"result":"success","data":{
+				"recordsFiltered":1,
+				"data":[{"rating_key":100,"title":"Stale Movie","year":2020,"media_type":"movie","guid":"imdb://tt1111111"}]
+			}}}`))
+		case strings.HasSuffix(r.URL.Path, "/library/metadata/100"):
+			w.WriteHeader(http.StatusNotFound)
+		case strings.HasSuffix(r.URL.Path, "/library/sections"):
+			w.Write([]byte(`{"MediaContainer":{"Directory":[{"key":"1","title":"Movies","type":"movie"}]}}`))
+		case strings.Contains(r.URL.Path, "/sections/1/all"):
+			w.Write([]byte(`{"MediaContainer":{"Metadata":[
+				{"title":"Entirely Different","ratingKey":"200","year":1999,
+				 "guid":"plex://movie/y","Guid":[{"id":"imdb://tt9999999"}]}
+			]}}`))
+		default:
+			w.Write([]byte(`{}`))
+		}
+	})
+	cfg.DryRun = false
+	orch := newOrch(t, cfg)
+	if !orch.Run(context.Background()) {
+		t.Fatal("Run() = false, want true (an unmatched stale item is not a failure)")
+	}
+	if backupCalled {
+		t.Error("backup_db called with zero mappings ready; the gate must skip it")
 	}
 }
 
@@ -815,15 +930,30 @@ func TestRun_EmptyPlexIndex(t *testing.T) {
 }
 
 func TestRun_BackupFailureAborts(t *testing.T) {
+	var mu sync.Mutex
 	callCounts := map[string]int{}
 	cfg := testServer(t, func(w http.ResponseWriter, r *http.Request) {
 		cmd := r.URL.Query().Get("cmd")
+		mu.Lock()
 		callCounts[cmd]++
-		switch cmd {
-		case "backup_db":
+		mu.Unlock()
+		switch {
+		case cmd == "backup_db":
 			w.WriteHeader(http.StatusInternalServerError)
-		case "get_history":
-			w.Write([]byte(`{"response":{"result":"success","data":{"recordsFiltered":0,"data":[]}}}`))
+		case cmd == "get_history":
+			w.Write([]byte(`{"response":{"result":"success","data":{
+				"recordsFiltered":1,
+				"data":[{"rating_key":100,"title":"Stale Movie","year":2020,"media_type":"movie","guid":"imdb://tt1111111"}]
+			}}}`))
+		case strings.HasSuffix(r.URL.Path, "/library/metadata/100"):
+			w.WriteHeader(http.StatusNotFound)
+		case strings.HasSuffix(r.URL.Path, "/library/sections"):
+			w.Write([]byte(`{"MediaContainer":{"Directory":[{"key":"1","title":"Movies","type":"movie"}]}}`))
+		case strings.Contains(r.URL.Path, "/sections/1/all"):
+			w.Write([]byte(`{"MediaContainer":{"Metadata":[
+				{"title":"Stale Movie","ratingKey":"200","year":2020,
+				 "guid":"plex://movie/x","Guid":[{"id":"imdb://tt1111111"}]}
+			]}}`))
 		default:
 			w.Write([]byte(`{}`))
 		}
@@ -833,11 +963,99 @@ func TestRun_BackupFailureAborts(t *testing.T) {
 	if orch.Run(context.Background()) {
 		t.Error("Run() = true, want false when backup_db fails in live mode (no recovery point, must abort)")
 	}
+	mu.Lock()
+	defer mu.Unlock()
 	if callCounts["backup_db"] != 3 {
 		t.Errorf("expected backup_db called 3 times via retry, got %d", callCounts["backup_db"])
 	}
-	if callCounts["get_history"] != 0 {
-		t.Errorf("expected get_history NOT called (run aborts before step 1), got %d", callCounts["get_history"])
+	if callCounts["update_metadata_details"] != 0 {
+		t.Errorf("expected update_metadata_details NOT called (backup failed, no recovery point), got %d", callCounts["update_metadata_details"])
+	}
+	if callCounts["delete_recently_added"] != 0 {
+		t.Errorf("expected delete_recently_added NOT called after failed backup, got %d", callCounts["delete_recently_added"])
+	}
+}
+
+// TestRun_ClearFailureFailsRun pins the cleanup-propagation contract: a live
+// run whose updates land but whose recently-added clear fails must report
+// failure, not success with silently incomplete cleanup.
+func TestRun_ClearFailureFailsRun(t *testing.T) {
+	cfg := testServer(t, func(w http.ResponseWriter, r *http.Request) {
+		cmd := r.URL.Query().Get("cmd")
+		switch {
+		case cmd == "get_history":
+			w.Write([]byte(`{"response":{"result":"success","data":{
+				"recordsFiltered":1,
+				"data":[{"rating_key":100,"title":"Stale Movie","year":2020,"media_type":"movie","guid":"imdb://tt1111111"}]
+			}}}`))
+		case cmd == "update_metadata_details":
+			w.Write([]byte(`{"response":{"result":"success"}}`))
+		case cmd == "delete_recently_added":
+			w.WriteHeader(http.StatusInternalServerError)
+		case strings.HasSuffix(r.URL.Path, "/library/metadata/100"):
+			w.WriteHeader(http.StatusNotFound)
+		case strings.HasSuffix(r.URL.Path, "/library/sections"):
+			w.Write([]byte(`{"MediaContainer":{"Directory":[{"key":"1","title":"Movies","type":"movie"}]}}`))
+		case strings.Contains(r.URL.Path, "/sections/1/all"):
+			w.Write([]byte(`{"MediaContainer":{"Metadata":[
+				{"title":"Stale Movie","ratingKey":"200","year":2020,
+				 "guid":"plex://movie/x","Guid":[{"id":"imdb://tt1111111"}]}
+			]}}`))
+		default:
+			w.Write([]byte(`{}`))
+		}
+	})
+	cfg.DryRun = false
+	orch := newOrch(t, cfg)
+	if orch.Run(context.Background()) {
+		t.Error("Run() = true, want false when the recently-added clear fails (documented cleanup incomplete)")
+	}
+}
+
+// TestRun_RefusesOverlappingRun pins the single-flight contract: while one
+// pass holds the run lock, a concurrent Run refuses immediately — making no
+// Tautulli or Plex call — and returns false; once the holder finishes and
+// releases the lock, a subsequent pass proceeds normally.
+func TestRun_RefusesOverlappingRun(t *testing.T) {
+	release := make(chan struct{})
+	firstEntered := make(chan struct{})
+	var histCalls atomic.Int32
+	cfg := testServer(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Get("cmd") == "get_history" {
+			if histCalls.Add(1) == 1 {
+				close(firstEntered)
+				<-release
+			}
+			w.Write([]byte(`{"response":{"result":"success","data":{"recordsFiltered":0,"data":[]}}}`))
+			return
+		}
+		w.Write([]byte(`{}`))
+	})
+	cfg.DryRun = true
+	orch := newOrch(t, cfg)
+
+	firstDone := make(chan bool)
+	go func() { firstDone <- orch.Run(context.Background()) }()
+	<-firstEntered // the first pass now holds the lock, blocked mid-collection
+
+	if orch.Run(context.Background()) {
+		t.Error("overlapping Run() = true, want false while another pass holds the lock")
+	}
+	if got := histCalls.Load(); got != 1 {
+		t.Errorf("refused pass reached the API: get_history calls = %d, want 1 (only the holder's)", got)
+	}
+
+	close(release)
+	if !<-firstDone {
+		t.Error("holder Run() = false, want true (a refused contender must not affect the holder)")
+	}
+
+	// Lock released with the holder gone: the next pass proceeds normally.
+	if !orch.Run(context.Background()) {
+		t.Error("post-release Run() = false, want true (lock must be released after a pass)")
+	}
+	if got := histCalls.Load(); got != 2 {
+		t.Errorf("get_history calls = %d, want 2 (holder + post-release pass)", got)
 	}
 }
 
@@ -1051,6 +1269,7 @@ func TestRunScheduler_ShutdownInterruptedRunNotCountedAsFailure(t *testing.T) {
 	}
 
 	o := New(&fakePlex{}, &fakeTautulli{}, &config.Config{DryRun: true, ScheduleInterval: time.Hour})
+	o.RunLockPath = filepath.Join(t.TempDir(), "remap.lock")
 	o.RunScheduler(ctx, setHealthy)
 
 	out := buf.String()
@@ -1071,6 +1290,7 @@ func TestRun_CancelledContextReturnsFalse(t *testing.T) {
 	cancel()
 	o := New(&fakePlex{}, &fakeTautulli{}, &config.Config{DryRun: true})
 	o.PaginationDelay = time.Millisecond
+	o.RunLockPath = filepath.Join(t.TempDir(), "remap.lock")
 	if o.Run(ctx) {
 		t.Error("Run() = true, want false when the context is cancelled (a shutdown-interrupted run must not report success)")
 	}
@@ -1154,6 +1374,7 @@ func TestRunScheduler_FlipsUnhealthyAfterConsecutiveFailures(t *testing.T) {
 	t.Cleanup(cancel)
 	ft := &scriptedScheduler{failPlan: []bool{true, true, true}, cancel: cancel}
 	o := New(&fakePlex{}, ft, &config.Config{DryRun: true, ScheduleInterval: time.Millisecond})
+	o.RunLockPath = filepath.Join(t.TempDir(), "remap.lock")
 
 	trueCount, falseCount := 0, 0
 	setHealthy := func(healthy bool) {
@@ -1190,6 +1411,7 @@ func TestRunScheduler_ResetsFailureCountOnSuccess(t *testing.T) {
 	// reaches the threshold of 3, so the marker must never flip unhealthy.
 	ft := &scriptedScheduler{failPlan: []bool{true, true, false, true}, cancel: cancel}
 	o := New(&fakePlex{}, ft, &config.Config{DryRun: true, ScheduleInterval: time.Millisecond})
+	o.RunLockPath = filepath.Join(t.TempDir(), "remap.lock")
 
 	falseCount := 0
 	setHealthy := func(healthy bool) {

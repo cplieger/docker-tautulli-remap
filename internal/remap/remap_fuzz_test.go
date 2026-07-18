@@ -5,6 +5,8 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/cplieger/runesafe"
 )
 
 func FuzzFlexIntUnmarshal(f *testing.F) {
@@ -164,7 +166,7 @@ func FuzzMatchOne(f *testing.F) {
 		mt := ParseMediaType(mediaType)
 		item := &TautulliEntry{
 			RatingKey: "100",
-			Title:     title,
+			Title:     runesafe.Untrusted(title),
 			Year:      "2020",
 			MediaType: mt,
 			GUID:      guid,
@@ -181,7 +183,7 @@ func FuzzMatchOne(f *testing.F) {
 		}
 		validKeys := map[string]bool{"200": true, "300": true, "400": true, "500": true}
 
-		newKey, method := matchOne(item, "100", nil, byGUID, byTitleYear, byTitle, true, true)
+		newKey, method, matchedYear := matchOne(item, "100", nil, byGUID, byTitleYear, byTitle, true, true)
 
 		// A returned key is never invented: it must be one of the index entries.
 		if newKey != "" && !validKeys[newKey] {
@@ -199,6 +201,14 @@ func FuzzMatchOne(f *testing.F) {
 				t.Errorf("GUID match crossed media type: item type %q matched %q-typed entry %q",
 					item.MediaType, pe.Type, newKey)
 			}
+		}
+		// matchedYear is set only by title-only matches, and always to the
+		// matched entry's own year.
+		if matchedYear != "" && method != MethodTitleOnly {
+			t.Errorf("matchedYear %q set by non-title-only method %q", matchedYear, method)
+		}
+		if method == MethodTitleOnly && matchedYear != byTitle[titleKey(NormalizeTitle(item.Title.Raw()), item.MediaType)].Year {
+			t.Errorf("matchedYear %q does not carry the matched entry's year", matchedYear)
 		}
 	})
 }

@@ -1,7 +1,6 @@
 package remap
 
 import (
-	"fmt"
 	"slices"
 	"strconv"
 	"strings"
@@ -59,7 +58,7 @@ func matchOne(
 	resolved map[string]string,
 	byGUID, byTitleYear, byTitle map[string]PlexEntry,
 	fallbackTitleYear, fallbackTitleOnly bool,
-) (newKey string, method MatchMethod) {
+) (newKey string, method MatchMethod, matchedYear string) {
 	// Strategy 0: Episode-GUID resolution (shows only). The orchestrator has
 	// already looked up one of this stale show's watched episode GUIDs in Plex
 	// and recorded the current show key; prefer that exact result over any
@@ -67,7 +66,7 @@ func matchOne(
 	// validates the key, so the newKey != oldKey guard is all that is needed to
 	// reject a no-op (unchanged-key) resolution.
 	if rk, ok := resolved[oldKey]; ok && rk != oldKey {
-		return rk, MethodEpisodeGUID
+		return rk, MethodEpisodeGUID, ""
 	}
 
 	// Strategy 1: Match by GUID. byGUID is keyed by the global, normalized GUID
@@ -79,7 +78,7 @@ func matchOne(
 	// type-keyed.
 	if item.GUID != "" {
 		if pe, ok := byGUID[item.GUID]; ok && pe.RatingKey != oldKey && pe.Type == item.MediaType {
-			return pe.RatingKey, MethodGUID
+			return pe.RatingKey, MethodGUID, ""
 		}
 	}
 
@@ -90,33 +89,36 @@ func matchOne(
 }
 
 // matchByTitle applies the title+year and (optionally) title-only fallback
-// strategies to a stale item, returning ("", "") when neither enabled strategy
-// matches or the item has no usable title. The lookup keys encode the media
-// type, so any match is same-type by construction.
+// strategies to a stale item, returning ("", "", "") when neither enabled
+// strategy matches or the item has no usable title. The lookup keys encode the
+// media type, so any match is same-type by construction. matchedYear is the
+// matched entry's release year, set only by the title-only strategy — the one
+// place it can differ from the item's own year (title+year matches are
+// same-year by construction), so callers can surface the year transition.
 func matchByTitle(
 	item *TautulliEntry,
 	oldKey string,
 	byTitleYear, byTitle map[string]PlexEntry,
 	fallbackTitleYear, fallbackTitleOnly bool,
-) (string, MatchMethod) {
-	normalizedTitle := NormalizeTitle(item.Title)
+) (newKey string, method MatchMethod, matchedYear string) {
+	normalizedTitle := NormalizeTitle(item.Title.Raw())
 	if normalizedTitle == "" {
-		return "", ""
+		return "", "", ""
 	}
 
 	if fallbackTitleYear {
 		if pe, ok := byTitleYear[titleYearKey(normalizedTitle, item.Year, item.MediaType)]; ok && pe.RatingKey != oldKey {
-			return pe.RatingKey, MethodTitleYear
+			return pe.RatingKey, MethodTitleYear, ""
 		}
 	}
 
 	if fallbackTitleOnly {
 		if pe, ok := byTitle[titleKey(normalizedTitle, item.MediaType)]; ok && pe.RatingKey != oldKey {
-			return pe.RatingKey, MatchMethod(fmt.Sprintf("%s (%s -> %s)", MethodTitleOnly, item.Year, pe.Year))
+			return pe.RatingKey, MethodTitleOnly, pe.Year
 		}
 	}
 
-	return "", ""
+	return "", "", ""
 }
 
 // MatchStaleItems matches all stale items against the Plex index, preferring
@@ -132,12 +134,13 @@ func MatchStaleItems(
 	var unmatched []UnmatchResult
 
 	for oldKey, item := range stale {
-		newKey, method := matchOne(&item, oldKey, resolved, byGUID, byTitleYear, byTitle, fallbackTitleYear, fallbackTitleOnly)
+		newKey, method, matchedYear := matchOne(&item, oldKey, resolved, byGUID, byTitleYear, byTitle, fallbackTitleYear, fallbackTitleOnly)
 		if newKey != "" {
 			matched = append(matched, MatchResult{
 				Title: item.Title, Year: item.Year,
 				OldKey: oldKey, NewKey: newKey,
 				MediaType: item.MediaType, Method: method,
+				MatchedYear: matchedYear,
 			})
 			continue
 		}
