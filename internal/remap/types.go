@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"strconv"
+
+	"github.com/cplieger/runesafe"
 )
 
 // MediaType represents the type of media item.
@@ -108,9 +110,15 @@ func (f *FlexInt) UnmarshalJSON(data []byte) error {
 }
 
 // TautulliEntry represents a unique item from Tautulli history.
+//
+// Title (here and on PlexEntry / MatchResult / UnmatchResult / HistoryItem /
+// Section / LibItem) is media-server text sourced from the wild — agents,
+// filenames — so it carries the runesafe.Untrusted tag: raw bytes in for
+// matching (NormalizeTitle reads Raw()), sanitized automatically at every
+// slog emit.
 type TautulliEntry struct {
 	RatingKey string
-	Title     string
+	Title     runesafe.Untrusted
 	Year      string
 	MediaType MediaType
 	GUID      string
@@ -127,7 +135,7 @@ type TautulliEntry struct {
 // PlexEntry represents a Plex library item used for matching.
 type PlexEntry struct {
 	RatingKey string
-	Title     string
+	Title     runesafe.Untrusted
 	Year      string
 	Type      MediaType
 	GUIDs     []string
@@ -135,27 +143,34 @@ type PlexEntry struct {
 
 // MatchResult holds the outcome of a successful match.
 type MatchResult struct {
-	Title     string
+	Title     runesafe.Untrusted
 	Year      string
 	OldKey    string
 	NewKey    string
 	MediaType MediaType
 	Method    MatchMethod
+	// MatchedYear is the matched Plex entry's release year, set only for
+	// title-only matches — the one strategy where it can differ from Year
+	// (the history item's year). Consumers surface the transition instead of
+	// encoding it into Method, which stays a closed enum.
+	MatchedYear string
 }
 
 // UnmatchResult holds an item that could not be matched.
 type UnmatchResult struct {
-	Title     string
+	Title     runesafe.Untrusted
 	Year      string
 	OldKey    string
 	MediaType MediaType
 }
 
 // HistoryItem represents a single row from Tautulli's get_history response.
+// Title and GrandparentTitle are tagged at this decode boundary (see
+// TautulliEntry).
 type HistoryItem struct {
-	Title            string `json:"title"`
-	GrandparentTitle string `json:"grandparent_title"`
-	GUID             string `json:"guid"`
+	Title            runesafe.Untrusted `json:"title"`
+	GrandparentTitle runesafe.Untrusted `json:"grandparent_title"`
+	GUID             string             `json:"guid"`
 	// MediaType is decoded as a plain string rather than the MediaType type so a
 	// row with an unexpected value (music "track", "clip", live TV, or a future
 	// type) does not fail the whole page decode through MediaType's strict
@@ -209,13 +224,13 @@ var GUIDMappings = [...]GUIDMapping{
 // Section represents a Plex library section.
 type Section struct {
 	Key   string
-	Title string
+	Title runesafe.Untrusted
 	Type  string
 }
 
 // LibItem represents a Plex library item.
 type LibItem struct {
-	Title     string
+	Title     runesafe.Untrusted
 	GUIDs     []string
 	RatingKey int
 	Year      int

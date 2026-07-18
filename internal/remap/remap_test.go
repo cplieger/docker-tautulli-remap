@@ -83,9 +83,12 @@ func TestMatchOne(t *testing.T) {
 	t.Run("guid match", func(t *testing.T) {
 		item := &TautulliEntry{GUID: "imdb://tt1", Title: "M", Year: "2020", MediaType: Movie}
 		byGUID := map[string]PlexEntry{"imdb://tt1": {RatingKey: "200", Type: Movie}}
-		key, method := matchOne(item, "100", nil, byGUID, nil, nil, true, true)
+		key, method, matchedYear := matchOne(item, "100", nil, byGUID, nil, nil, true, true)
 		if key != "200" || method != MethodGUID {
 			t.Errorf("got (%q, %q), want (200, guid)", key, method)
+		}
+		if matchedYear != "" {
+			t.Errorf("matchedYear = %q, want empty (only title-only matches carry it)", matchedYear)
 		}
 	})
 
@@ -97,26 +100,29 @@ func TestMatchOne(t *testing.T) {
 		// be remapped onto the wrong-type item.
 		item := &TautulliEntry{GUID: "tmdb://12345", Title: "Quiz Show", Year: "1994", MediaType: Movie}
 		byGUID := map[string]PlexEntry{"tmdb://12345": {RatingKey: "200", Title: "Quiz Show", Year: "1994", Type: Show}}
-		key, method := matchOne(item, "100", nil, byGUID, nil, nil, true, true)
-		if key != "" || method != "" {
-			t.Errorf("got (%q, %q), want empty (GUID strategy must reject a cross-type match)", key, method)
+		key, method, matchedYear := matchOne(item, "100", nil, byGUID, nil, nil, true, true)
+		if key != "" || method != "" || matchedYear != "" {
+			t.Errorf("got (%q, %q, %q), want empty (GUID strategy must reject a cross-type match)", key, method, matchedYear)
 		}
 	})
 
 	t.Run("title+year fallback", func(t *testing.T) {
 		item := &TautulliEntry{Title: "Movie", Year: "2020", MediaType: Movie}
 		byTY := map[string]PlexEntry{"movie|2020|movie": {RatingKey: "200", Type: Movie}}
-		key, method := matchOne(item, "100", nil, nil, byTY, nil, true, true)
+		key, method, matchedYear := matchOne(item, "100", nil, nil, byTY, nil, true, true)
 		if key != "200" || method != MethodTitleYear {
 			t.Errorf("got (%q, %q), want (200, title+year)", key, method)
+		}
+		if matchedYear != "" {
+			t.Errorf("matchedYear = %q, want empty (title+year matches are same-year by construction)", matchedYear)
 		}
 	})
 
 	t.Run("no match", func(t *testing.T) {
 		item := &TautulliEntry{Title: "X", Year: "2020", MediaType: Movie}
-		key, method := matchOne(item, "100", nil, nil, nil, nil, true, true)
-		if key != "" || method != "" {
-			t.Errorf("got (%q, %q), want empty", key, method)
+		key, method, matchedYear := matchOne(item, "100", nil, nil, nil, nil, true, true)
+		if key != "" || method != "" || matchedYear != "" {
+			t.Errorf("got (%q, %q, %q), want empty", key, method, matchedYear)
 		}
 	})
 
@@ -126,18 +132,21 @@ func TestMatchOne(t *testing.T) {
 		item := &TautulliEntry{Title: "Show", Year: "2021", MediaType: Show, GUID: "tvdb://1"}
 		byGUID := map[string]PlexEntry{"tvdb://1": {RatingKey: "999", Type: Show}}
 		resolved := map[string]string{"100": "200"}
-		key, method := matchOne(item, "100", resolved, byGUID, nil, nil, true, true)
+		key, method, matchedYear := matchOne(item, "100", resolved, byGUID, nil, nil, true, true)
 		if key != "200" || method != MethodEpisodeGUID {
 			t.Errorf("got (%q, %q), want (200, episode-guid)", key, method)
+		}
+		if matchedYear != "" {
+			t.Errorf("matchedYear = %q, want empty (only title-only matches carry it)", matchedYear)
 		}
 	})
 
 	t.Run("episode-guid resolution to the same key is not a match", func(t *testing.T) {
 		item := &TautulliEntry{Title: "Show", Year: "2021", MediaType: Show}
 		resolved := map[string]string{"100": "100"} // unchanged key
-		key, method := matchOne(item, "100", resolved, nil, nil, nil, true, true)
-		if key != "" || method != "" {
-			t.Errorf("got (%q, %q), want empty (a no-op resolution must not match)", key, method)
+		key, method, matchedYear := matchOne(item, "100", resolved, nil, nil, nil, true, true)
+		if key != "" || method != "" || matchedYear != "" {
+			t.Errorf("got (%q, %q, %q), want empty (a no-op resolution must not match)", key, method, matchedYear)
 		}
 	})
 }
@@ -642,29 +651,34 @@ func TestMatchOne_titleYearTakesPriorityOverTitleOnly(t *testing.T) {
 	item := &TautulliEntry{Title: "Dune", Year: "2020", MediaType: Movie}
 	byTitleYear := map[string]PlexEntry{"dune|2020|movie": {RatingKey: "200", Title: "Dune", Year: "2020", Type: Movie}}
 	byTitle := map[string]PlexEntry{"dune|movie": {RatingKey: "300", Title: "Dune", Year: "2021", Type: Movie}}
-	key, method := matchOne(item, "100", nil, nil, byTitleYear, byTitle, true, true)
+	key, method, matchedYear := matchOne(item, "100", nil, nil, byTitleYear, byTitle, true, true)
 	if key != "200" {
 		t.Errorf("matchOne key = %q, want 200 (title+year must win over title-only)", key)
 	}
 	if method != MethodTitleYear {
 		t.Errorf("matchOne method = %q, want %q (strategy 2 precedes strategy 3)", method, MethodTitleYear)
 	}
+	if matchedYear != "" {
+		t.Errorf("matchedYear = %q, want empty when title+year wins", matchedYear)
+	}
 }
 
-func TestMatchOne_titleOnlyMethodShowsYearTransition(t *testing.T) {
-	// The title-only method label encodes the stale->matched year drift it
-	// tolerated (item.Year -> pe.Year), surfaced to the operator judging the
-	// riskiest match. Existing tests assert only the "title only" prefix, so a
-	// regression that drops or swaps the years survives; pin the exact format.
+func TestMatchOne_titleOnlyCarriesYearTransition(t *testing.T) {
+	// A title-only match is the riskiest strategy and may land on an entry
+	// with a different year. The method stays the closed MethodTitleOnly enum
+	// value; the tolerated drift is carried separately in matchedYear (the
+	// matched entry's year) for the operator-facing remap log line.
 	item := &TautulliEntry{Title: "Dune", Year: "1984", MediaType: Movie}
 	byTitle := map[string]PlexEntry{"dune|movie": {RatingKey: "300", Title: "Dune", Year: "2021", Type: Movie}}
-	key, method := matchOne(item, "100", nil, nil, nil, byTitle, true, true)
+	key, method, matchedYear := matchOne(item, "100", nil, nil, nil, byTitle, true, true)
 	if key != "300" {
 		t.Errorf("matchOne key = %q, want 300", key)
 	}
-	want := MatchMethod("title only (1984 -> 2021)")
-	if method != want {
-		t.Errorf("matchOne method = %q, want %q", method, want)
+	if method != MethodTitleOnly {
+		t.Errorf("matchOne method = %q, want %q (closed enum, no formatted years)", method, MethodTitleOnly)
+	}
+	if matchedYear != "2021" {
+		t.Errorf("matchedYear = %q, want 2021 (the matched entry's year)", matchedYear)
 	}
 }
 

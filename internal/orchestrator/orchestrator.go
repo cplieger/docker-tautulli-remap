@@ -11,7 +11,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/cplieger/httpx/v2"
+	"github.com/cplieger/httpx/v3"
+	"github.com/cplieger/scheduler/v2"
 	"github.com/cplieger/tautulli-remap/internal/config"
 	"github.com/cplieger/tautulli-remap/internal/remap"
 	"github.com/cplieger/tautulli-remap/internal/tautulli"
@@ -19,10 +20,16 @@ import (
 )
 
 const (
-	maxTautulliRecords     = 500_000
 	maxConsecutiveFailures = 10
 	plexParallelism        = 8
 )
+
+// defaultRunLockPath is the flock(2) lock file that serializes remap passes
+// across processes. It lives on the same container-private /tmp tmpfs as the
+// health marker — the one writable path under the hardened profile — so the
+// resident process and every `docker exec … trigger` child contend on the
+// same file.
+const defaultRunLockPath = "/tmp/.remap.lock"
 
 // historyPageSize is the number of Tautulli history rows requested per page;
 // the pagination cursor advances by the same amount.
@@ -82,6 +89,9 @@ type Orchestrator struct {
 	tautulli TautulliClient
 	cfg      *config.Config
 
+	// RunLockPath is the cross-process run lock file. Empty uses the default.
+	RunLockPath string
+
 	// PaginationDelay is the pause between history pages. Zero uses the default.
 	PaginationDelay time.Duration
 }
@@ -114,10 +124,22 @@ func (o *Orchestrator) createBackup(ctx context.Context) bool {
 }
 
 // Run executes the remap workflow. Returns true on success.
+//
+// A cross-process flock serializes passes: the scheduled loop, an Ofelia
+// job-exec trigger, and a manual `docker exec … trigger` all run Run in
+// (potentially) separate processes sharing the container's /tmp, and nothing
+// else guarantees mutual exclusion (Ofelia's no-overlap covers only its own
+// job). A pass that finds the lock held refuses immediately — before any
+// Tautulli or Plex call — and reports failure: the trigger exits non-zero for
+// its scheduler, and a scheduled tick counts toward the unhealthy threshold,
+// so a wedged run eventually surfaces through both the exit-code alert and
+// the health marker instead of being silently skipped.
 func (o *Orchestrator) Run(ctx context.Context) bool {
-	if !o.createBackup(ctx) {
+	lock, ok := o.acquireRunLock()
+	if !ok {
 		return false
 	}
+	defer lock.Unlock()
 
 	// Step 1: Collect items from Tautulli history
 	slog.Info("step 1: collecting items from Tautulli history")
@@ -176,6 +198,14 @@ func (o *Orchestrator) Run(ctx context.Context) bool {
 	matched, unmatched := remap.MatchStaleItems(stale, resolved, byGUID, byTitleYear, byTitle,
 		o.cfg.FallbackTitleYear, o.cfg.FallbackTitleOnly)
 
+	// Step 4.5: Backup, deferred until at least one mapping is ready to apply
+	// so a pass that finds nothing to mutate never spends a backup. It still
+	// precedes the first write: ApplyRemappings and the recently-added clear
+	// are the only mutation points and both run after this gate.
+	if len(matched) > 0 && !o.createBackup(ctx) {
+		return false
+	}
+
 	// Step 5: Apply remappings
 	updated, failed, aborted := o.ApplyRemappings(ctx, matched, unmatched)
 
@@ -188,26 +218,77 @@ func (o *Orchestrator) Run(ctx context.Context) bool {
 		return false
 	}
 
-	// Step 6: Clear recently added. Live mode clears only when an update landed
-	// (idempotency). Dry-run never increments updated, so preview the clear when
-	// matches exist, otherwise the dry-run output hides a mutation a live run performs.
-	switch {
-	case updated > 0:
-		o.ClearRecentlyAdded(ctx)
-	case o.cfg.DryRun && len(matched) > 0:
-		o.ClearRecentlyAdded(ctx)
-	default:
-		slog.Info("skipping clear recently added", "reason", "no_updates")
-	}
+	// Step 6: Clear recently added (see clearIfNeeded for the policy).
+	cleared := o.clearIfNeeded(ctx, updated, len(matched))
 
 	logScanComplete(len(tautulliItems), len(stale), len(matched), len(unmatched), updated, failed, o.cfg.DryRun)
 
 	// Success when nothing failed, or when at least one update landed: a
 	// partial remap still made progress and must not flap the health marker.
-	// A tripped circuit breaker (aborted) always fails the run, even if some
-	// updates landed before it opened, because the remap phase did not run to
-	// completion.
-	return !aborted && (failed == 0 || updated > 0)
+	// Deliberately NOT strict-on-failures (revisited 2026-07): per-item update
+	// failures are usually transient, and failing a pass that landed 499 of
+	// 500 updates would alert nightly on near-success; a genuinely poisoned
+	// item still surfaces once library churn settles, because it then becomes
+	// the pass's only work (failed>0, updated==0 -> failure). A tripped
+	// circuit breaker (aborted) always fails the run, even if some updates
+	// landed before it opened, because the remap phase did not run to
+	// completion. A failed recently-added clear also fails the run: the
+	// documented cleanup did not happen, and the next pass retries it
+	// (updated>0 recurs while stale entries remain).
+	return !aborted && cleared && (failed == 0 || updated > 0)
+}
+
+// acquireRunLock takes the cross-process run lock. ok=false (with the reason
+// already logged) means another pass is in flight or the lock file is broken;
+// either way the caller must not proceed. The returned lock is non-nil only
+// when ok is true.
+func (o *Orchestrator) acquireRunLock() (*scheduler.Lock, bool) {
+	lock, ok, err := scheduler.TryLock(o.runLockPath())
+	if err != nil {
+		slog.Error("cannot acquire run lock", "path", o.runLockPath(), "error", err)
+		return nil, false
+	}
+	if !ok {
+		logRunRefused(o.runLockPath())
+		return nil, false
+	}
+	return lock, true
+}
+
+// clearIfNeeded runs the recently-added clear when the pass's outcome calls
+// for it: live mode clears only when an update landed (idempotency), and
+// dry-run previews the clear when matches exist so the preview does not hide
+// a mutation a live run performs. Returns false when a needed clear failed.
+func (o *Orchestrator) clearIfNeeded(ctx context.Context, updated, matched int) bool {
+	switch {
+	case updated > 0:
+		return o.ClearRecentlyAdded(ctx)
+	case o.cfg.DryRun && matched > 0:
+		return o.ClearRecentlyAdded(ctx)
+	default:
+		slog.Info("skipping clear recently added", "reason", "no_updates")
+		return true
+	}
+}
+
+// runLockPath returns the configured run lock path or the default.
+func (o *Orchestrator) runLockPath() string {
+	if o.RunLockPath != "" {
+		return o.RunLockPath
+	}
+	return defaultRunLockPath
+}
+
+// logRunRefused logs the refusal of an overlapping pass, including how long
+// the current holder has been running when the lock file's holder timestamp
+// is readable (observability only; correctness never depends on it).
+func logRunRefused(path string) {
+	if since, known := scheduler.ReadHolder(path); known {
+		slog.Warn("another remap pass is already running; refusing overlapping run",
+			"lock", path, "holder_age", time.Since(since).Round(time.Second).String())
+		return
+	}
+	slog.Warn("another remap pass is already running; refusing overlapping run", "lock", path)
 }
 
 // buildIndex builds the Plex library index used for matching. It returns
@@ -309,9 +390,9 @@ func (o *Orchestrator) CollectTautulliItems(ctx context.Context) (items map[stri
 		if total < 0 {
 			total = page.RecordsFiltered
 			slog.Info("total history records", "count", total)
-			if total > maxTautulliRecords {
-				slog.Error("history record count exceeds sanity cap",
-					"count", total, "max", maxTautulliRecords)
+			if total > o.maxHistoryRecords() {
+				slog.Error("history record count exceeds sanity cap; raise MAX_HISTORY_RECORDS if this history is genuine",
+					"count", total, "max", o.maxHistoryRecords())
 				return nil, 0
 			}
 		}
@@ -528,6 +609,21 @@ func logScanComplete(total, stale, matched, unmatched, updated, failed int, dryR
 		"dry_run", dryRun)
 }
 
+// logRemap emits the per-item remap line. A title-only match may land on an
+// entry with a different year; the transition rides a dedicated matched_year
+// field appended only when it is informative (MatchMethod stays a closed enum).
+func (o *Orchestrator) logRemap(m *remap.MatchResult) {
+	attrs := []any{
+		"title", m.Title, "year", m.Year, "type", m.MediaType,
+		"old_key", m.OldKey, "new_key", m.NewKey,
+		"method", m.Method, "dry_run", o.cfg.DryRun,
+	}
+	if m.MatchedYear != "" && m.MatchedYear != m.Year {
+		attrs = append(attrs, "matched_year", m.MatchedYear)
+	}
+	slog.Info("remap", attrs...)
+}
+
 // applyMatched updates Tautulli metadata for each matched item, honoring
 // dry-run mode, context cancellation, and the consecutive-failure circuit
 // breaker. It returns the counts of updated and failed records, and whether
@@ -535,10 +631,7 @@ func logScanComplete(total, stale, matched, unmatched, updated, failed int, dryR
 func (o *Orchestrator) applyMatched(ctx context.Context, matched []remap.MatchResult) (updated, failed int, aborted bool) {
 	breaker := newCircuitBreaker(maxConsecutiveFailures)
 	for i, m := range matched {
-		slog.Info("remap",
-			"title", m.Title, "year", m.Year, "type", m.MediaType,
-			"old_key", m.OldKey, "new_key", m.NewKey,
-			"method", m.Method, "dry_run", o.cfg.DryRun)
+		o.logRemap(&m)
 		if o.cfg.DryRun {
 			continue
 		}
@@ -571,11 +664,13 @@ func (o *Orchestrator) applyMatched(ctx context.Context, matched []remap.MatchRe
 
 // ClearRecentlyAdded removes all entries from Tautulli's recently-added table
 // to prevent stale entries from appearing in the UI after a remap. It is a
-// no-op in dry-run mode.
-func (o *Orchestrator) ClearRecentlyAdded(ctx context.Context) {
+// no-op in dry-run mode. It returns false when the live clear failed, so the
+// run result reflects the incomplete cleanup instead of silently reporting
+// success (the next pass retries the clear as long as updates keep landing).
+func (o *Orchestrator) ClearRecentlyAdded(ctx context.Context) bool {
 	if o.cfg.DryRun {
 		slog.Info("(dry run) would clear recently added items")
-		return
+		return true
 	}
 	slog.Info("clearing recently added items")
 	if err := o.tautulli.DeleteRecentlyAdded(ctx); err != nil {
@@ -584,7 +679,9 @@ func (o *Orchestrator) ClearRecentlyAdded(ctx context.Context) {
 		} else {
 			slog.Error("failed to clear recently added", "error", err)
 		}
+		return false
 	}
+	return true
 }
 
 // paginationDelay returns the configured pagination delay or the default.
@@ -593,4 +690,14 @@ func (o *Orchestrator) paginationDelay() time.Duration {
 		return o.PaginationDelay
 	}
 	return defaultPaginationDelay
+}
+
+// maxHistoryRecords returns the configured history sanity cap, falling back
+// to the default when the config carries no positive value (a zero-value
+// Config must not abort every run at the first page).
+func (o *Orchestrator) maxHistoryRecords() int {
+	if o.cfg.MaxHistoryRecords > 0 {
+		return o.cfg.MaxHistoryRecords
+	}
+	return config.DefaultMaxHistoryRecords
 }

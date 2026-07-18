@@ -13,7 +13,7 @@ import (
 	"time"
 
 	"github.com/cplieger/health"
-	"github.com/cplieger/httpx/v2"
+	"github.com/cplieger/httpx/v3"
 	"github.com/cplieger/slogx"
 	appconfig "github.com/cplieger/tautulli-remap/internal/config"
 	"github.com/cplieger/tautulli-remap/internal/orchestrator"
@@ -33,7 +33,13 @@ func main() {
 	if len(os.Args) > 1 {
 		switch os.Args[1] {
 		case "health":
-			health.RunProbe(health.DefaultPath)
+			// Scheduled mode arms a freshness deadline: the loop refreshes
+			// the marker each pass, so a marker older than 3 intervals means
+			// a wedged loop and a restart fixes it. Resident-idle mode
+			// (interval 0) disables the deadline (WithMaxAge(0) is a no-op):
+			// an idle resident between external triggers is healthy.
+			health.RunProbe(health.DefaultPath,
+				health.WithMaxAge(3*appconfig.ScheduleInterval()))
 		case "trigger":
 			runTrigger()
 		default:
@@ -110,23 +116,33 @@ func doTrigger() int {
 	return finishTrigger(ctx, ok, marker.Set)
 }
 
+// exitInterrupted is the trigger's exit code for a pass interrupted by
+// shutdown before completing: distinct from 0 (an interrupted pass did not
+// verifiably finish its work, so recording success would be a lie to the
+// external scheduler) and from 1 (nothing failed either — the pass is simply
+// incomplete and safe to re-run, since passes are idempotent). Exit code 2 is
+// taken by the unknown-subcommand usage error.
+const exitInterrupted = 3
+
 // finishTrigger records a completed trigger run's outcome and returns the
 // process exit code. It checks ctx.Err() FIRST: a graceful shutdown (parent
-// context cancelled, e.g. SIGTERM landing mid-run) is not a failure, so it logs
-// an Info and returns 0 without touching the health marker — mirroring
-// RunScheduler.doRun, which does not count a shutdown-interrupted run toward its
-// failure threshold. Checking the context before Run's bool also makes the exit
-// code deterministic: a signal arriving during the first UpdateMetadata can
-// otherwise make Run return either true or false depending on timing. Only when
-// the context is still live does Run's bool decide the result — success marks
-// the resident process healthy and returns 0; failure leaves the marker
-// untouched (this trigger runs as a separate `docker exec` against the resident
-// process's marker, so flipping it here would misreport the resident container)
-// and signals failure via exit code 1.
+// context cancelled, e.g. SIGTERM landing mid-run) means the pass did not run
+// to completion, so it logs an Info, leaves the health marker untouched, and
+// returns exitInterrupted — the retryable "incomplete, not failed" signal for
+// the external scheduler (RunScheduler.doRun treats an interrupted run the
+// same way: its own third outcome, neither success nor a counted failure).
+// Checking the context before Run's bool also makes the exit code
+// deterministic: a signal arriving during the first UpdateMetadata can
+// otherwise make Run return either true or false depending on timing. Only
+// when the context is still live does Run's bool decide the result — success
+// marks the resident process healthy and returns 0; failure leaves the marker
+// untouched (this trigger runs as a separate `docker exec` against the
+// resident process's marker, so flipping it here would misreport the resident
+// container) and signals failure via exit code 1.
 func finishTrigger(ctx context.Context, ok bool, setHealthy func(bool)) int {
 	if ctx.Err() != nil {
-		slog.Info("trigger interrupted by shutdown", "cause", context.Cause(ctx))
-		return 0
+		slog.Info("trigger interrupted by shutdown; pass incomplete", "cause", context.Cause(ctx))
+		return exitInterrupted
 	}
 	if ok {
 		setHealthy(true)

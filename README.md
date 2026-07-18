@@ -65,13 +65,25 @@ services:
 | `FALLBACK_TITLE_YEAR` | Try title+year matching when GUID match fails                                                                                                     | `true`                 | No       |
 | `FALLBACK_TITLE_ONLY` | Try title-only matching as last resort (risk of false matches)                                                                                    | `false`                | No       |
 | `DRY_RUN`             | Log what would change without applying — set to false to apply                                                                                    | `true`                 | No       |
+| `MAX_HISTORY_RECORDS` | Sanity cap on the Tautulli history size a run will process; runs abort above it. Raise it if your history is genuinely larger                     | `500000`               | No       |
 
 ## Subcommands
 
-| Subcommand               | Description                                                                                                                  |
-| ------------------------ | ---------------------------------------------------------------------------------------------------------------------------- |
-| `tautulli-remap health`  | Checks the `/tmp/.healthy` marker file. Used as the Docker `HEALTHCHECK`. Exits 0 (healthy) or 1 (unhealthy).                |
-| `tautulli-remap trigger` | Executes a single remap pass immediately. Exits 0 on success, 1 on failure. Designed for `docker exec` or Ofelia `job-exec`. |
+| Subcommand               | Description                                                                                                                                                              |
+| ------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `tautulli-remap health`  | Checks the `/tmp/.healthy` marker file. Used as the Docker `HEALTHCHECK`. Exits 0 (healthy) or 1 (unhealthy).                                                            |
+| `tautulli-remap trigger` | Executes a single remap pass immediately. Exits 0 on success, 1 on failure, 3 when interrupted by shutdown before completing (retryable). Designed for `docker exec` or Ofelia `job-exec`. |
+
+### One pass at a time
+
+Remap passes are serialized by a cross-process lock (`/tmp/.remap.lock`): the
+built-in timer, an external `trigger`, and a manual `docker exec` can never run
+concurrent passes. A pass that finds another one already running refuses
+immediately — before contacting Tautulli or Plex — and reports failure (a
+trigger exits 1; a scheduled pass counts it toward the unhealthy threshold),
+so a wedged pass surfaces through your scheduler's alerting instead of being
+silently skipped. Since passes are idempotent, simply re-run once the active
+pass finishes.
 
 ### Recommended deployment with external scheduling
 
@@ -98,7 +110,7 @@ This keeps the container healthy (passing healthchecks) while delegating schedul
 The container includes a built-in Docker healthcheck via the `/tautulli-remap health` subcommand, which checks for a marker file at `/tmp/.healthy`. What that marker reflects depends on the run mode:
 
 - **Scheduled mode** (`SCHEDULE_INTERVAL` set to a duration): the main process refreshes `/tmp/.healthy` after each run and marks the container unhealthy after 3 consecutive failed runs (Tautulli or Plex APIs unreachable, returning errors, or the remap logic failing), recovering automatically on the next successful run (including runs where nothing needs remapping).
-- **Resident-idle mode** (`SCHEDULE_INTERVAL=off`): the marker reflects the resident process's liveness. Each `tautulli-remap trigger` run reports its own outcome via its exit code (0 success / 1 failure) for the external scheduler to act on; a failed trigger deliberately does **not** mark the long-lived container unhealthy.
+- **Resident-idle mode** (`SCHEDULE_INTERVAL=off`): the marker reflects the resident process's liveness. Each `tautulli-remap trigger` run reports its own outcome via its exit code (0 success / 1 failure / 3 interrupted by shutdown before completing) for the external scheduler to act on; a failed trigger deliberately does **not** mark the long-lived container unhealthy.
 
 ## Security
 
@@ -134,16 +146,25 @@ validated as numeric before URL interpolation (prevents path
 traversal). Plex token sent via `X-Plex-Token` header, not query
 string. HTTP error messages sanitized to strip query parameters
 (prevents API key leakage in logs). No `unsafe`, `reflect`,
-`os/exec`, or file I/O beyond the health marker.
+`os/exec`, or file I/O beyond the health marker and the run lock
+(both on `/tmp`).
 
 ## Dependencies
 
 All dependencies are updated automatically via [Renovate](https://github.com/renovatebot/renovate) and pinned by digest or version for reproducibility.
 
-| Dependency               | Source                                                           |
-| ------------------------ | ---------------------------------------------------------------- |
-| golang                   | [Go](https://hub.docker.com/_/golang)                            |
-| gcr.io/distroless/static | [Distroless](https://github.com/GoogleContainerTools/distroless) |
+| Dependency               | Source                                                           | Role                                        |
+| ------------------------ | ---------------------------------------------------------------- | ------------------------------------------- |
+| golang                   | [Go](https://hub.docker.com/_/golang)                            | Build image                                 |
+| gcr.io/distroless/static | [Distroless](https://github.com/GoogleContainerTools/distroless) | Runtime base image                          |
+| health                   | [cplieger/health](https://github.com/cplieger/health)            | File-marker healthcheck                     |
+| httpx                    | [cplieger/httpx](https://github.com/cplieger/httpx)              | Retrying HTTP + secret redaction (Tautulli) |
+| plexapi                  | [cplieger/plexapi](https://github.com/cplieger/plexapi)          | Plex API client                             |
+| scheduler                | [cplieger/scheduler](https://github.com/cplieger/scheduler)      | Cross-process run lock                      |
+| envx                     | [cplieger/envx](https://github.com/cplieger/envx)                | Env var parsing                             |
+| slogx                    | [cplieger/slogx](https://github.com/cplieger/slogx)              | Logging setup                               |
+| golang.org/x/sync        | [x/sync](https://pkg.go.dev/golang.org/x/sync)                   | Bounded concurrency (errgroup)              |
+| rapid                    | [pgregory.net/rapid](https://github.com/flyingmutant/rapid)      | Property-based tests (test-only)            |
 
 ## Credits
 

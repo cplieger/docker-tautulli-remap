@@ -10,6 +10,12 @@ import (
 	"github.com/cplieger/envx"
 )
 
+// DefaultMaxHistoryRecords is the default sanity cap on the Tautulli history
+// size a run will process. Histories above the cap abort the run (a count
+// that large usually means a filter regression, not a real library); genuinely
+// larger histories raise it via MAX_HISTORY_RECORDS.
+const DefaultMaxHistoryRecords = 500_000
+
 // Config holds the application configuration.
 type Config struct {
 	TautulliURL       string
@@ -17,14 +23,24 @@ type Config struct {
 	PlexURL           string
 	PlexToken         string
 	ScheduleInterval  time.Duration // 0 = resident-idle (external trigger)
+	MaxHistoryRecords int
 	DryRun            bool
 	FallbackTitleYear bool
 	FallbackTitleOnly bool
 }
 
+// ScheduleInterval returns the effective SCHEDULE_INTERVAL (0 =
+// resident-idle), parsed with the same rules Load applies. Exported
+// separately so the health subcommand can derive its probe max-age
+// before (and without) a full config load, which would fail on missing
+// secrets the probe does not need.
+func ScheduleInterval() time.Duration {
+	return parseScheduleInterval(envx.String("SCHEDULE_INTERVAL", "off"))
+}
+
 // Load parses environment variables and returns the configuration.
 func Load() (*Config, error) {
-	interval := parseScheduleInterval(envx.String("SCHEDULE_INTERVAL", "off"))
+	interval := ScheduleInterval()
 
 	apiKey, err := requireSecret("TAUTULLI_APIKEY")
 	if err != nil {
@@ -41,10 +57,24 @@ func Load() (*Config, error) {
 		PlexURL:           envx.String("PLEX_URL", "http://plex:32400"),
 		PlexToken:         token,
 		ScheduleInterval:  interval,
+		MaxHistoryRecords: maxHistoryRecords(),
 		DryRun:            envx.Bool("DRY_RUN", true),
 		FallbackTitleYear: envx.Bool("FALLBACK_TITLE_YEAR", true),
 		FallbackTitleOnly: envx.Bool("FALLBACK_TITLE_ONLY", false),
 	}, nil
+}
+
+// maxHistoryRecords reads MAX_HISTORY_RECORDS, falling back to the default on
+// unset or malformed values (envx warns) and on non-positive values, which
+// would make every run abort at the first history page.
+func maxHistoryRecords() int {
+	n := envx.Int("MAX_HISTORY_RECORDS", DefaultMaxHistoryRecords)
+	if n <= 0 {
+		slog.Warn("non-positive MAX_HISTORY_RECORDS, using default",
+			"value", n, "default", DefaultMaxHistoryRecords)
+		return DefaultMaxHistoryRecords
+	}
+	return n
 }
 
 // parseScheduleInterval parses SCHEDULE_INTERVAL. Accepts a Go duration
@@ -85,6 +115,7 @@ func LogConfig(cfg *Config) {
 		"fallback_title_year", cfg.FallbackTitleYear,
 		"fallback_title_only", cfg.FallbackTitleOnly,
 		"schedule_interval", mode,
+		"max_history_records", cfg.MaxHistoryRecords,
 	)
 }
 
