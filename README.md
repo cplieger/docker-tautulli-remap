@@ -69,9 +69,9 @@ services:
 
 ## Subcommands
 
-| Subcommand               | Description                                                                                                                                                              |
-| ------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `tautulli-remap health`  | Checks the `/tmp/.healthy` marker file. Used as the Docker `HEALTHCHECK`. Exits 0 (healthy) or 1 (unhealthy).                                                            |
+| Subcommand               | Description                                                                                                                                                                                |
+| ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `tautulli-remap health`  | Checks the `/tmp/.healthy` marker file. Used as the Docker `HEALTHCHECK`. Exits 0 (healthy) or 1 (unhealthy).                                                                              |
 | `tautulli-remap trigger` | Executes a single remap pass immediately. Exits 0 on success, 1 on failure, 3 when interrupted by shutdown before completing (retryable). Designed for `docker exec` or Ofelia `job-exec`. |
 
 ### One pass at a time
