@@ -12,7 +12,7 @@ import (
 	"time"
 
 	"github.com/cplieger/httpx/v3"
-	"github.com/cplieger/scheduler/v2"
+	"github.com/cplieger/scheduler/v3"
 	"github.com/cplieger/tautulli-remap/internal/config"
 	"github.com/cplieger/tautulli-remap/internal/remap"
 	"github.com/cplieger/tautulli-remap/internal/tautulli"
