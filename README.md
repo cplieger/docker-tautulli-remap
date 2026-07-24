@@ -13,26 +13,26 @@ Fix broken Tautulli watch history after reorganizing your Plex libraries.
 
 ## What it does
 
-When you reorganize your Plex libraries (move files, re-add content, change folder structure), Plex assigns new internal IDs to your media. This breaks Tautulli's watch history — it can no longer link history entries to the right items. This tool automatically finds the correct new IDs and updates Tautulli's database, preserving your watch history and statistics.
+When you reorganize your Plex libraries (move files, re-add content, change folder structure), Plex assigns new internal IDs to your media. This breaks Tautulli's watch history: it can no longer link history entries to the right items. This tool automatically finds the correct new IDs and updates Tautulli's database, preserving your watch history and statistics.
 
 For each stale entry, it finds the correct current rating key in Plex using a chain of strategies, most precise first:
 
-1. **Episode-GUID resolution** (TV shows) — resolves a show through one of its watched episodes' stable Plex GUIDs, which map directly to the show's current key. Exact and collision-free, and it restores the show's full watch history (all seasons and episodes).
-2. **GUID match** — Plex's globally unique identifier; covers movies and shows whose history still carries a show-level GUID (e.g. the legacy `thetvdb` agent).
-3. **Title+year match** (fallback) — matches by title and release year when no GUID resolves.
-4. **Title-only with media type guard** (optional) — last resort matching by title alone, restricted to the same media type to reduce false positives.
+1. **Episode-GUID resolution** (TV shows): resolves a show through one of its watched episodes' stable Plex GUIDs, which map directly to the show's current key. Exact and collision-free, and it restores the show's full watch history (all seasons and episodes).
+2. **GUID match**: Plex's globally unique identifier; covers movies and shows whose history still carries a show-level GUID (e.g. the legacy `thetvdb` agent).
+3. **Title+year match** (fallback): matches by title and release year when no GUID resolves.
+4. **Title-only with media type guard** (optional): last resort matching by title alone, restricted to the same media type to reduce false positives.
 
 ### Why this design
 
-- **Three run modes** — `SCHEDULE_INTERVAL (e.g. "24h")` for a built-in timer, `SCHEDULE_INTERVAL=off` for resident-idle (stays healthy, awaits `docker exec ... tautulli-remap trigger`), or `tautulli-remap trigger` for a one-shot pass that exits 0/1.
-- **Dry-run by default for safety** — no changes are applied until you explicitly set `DRY_RUN=false`, so you can always preview first.
-- **Matching strategies with increasing aggressiveness** — starts with the exact ones (episode-GUID resolution for shows, GUID match for movies), falls back to title+year, and optionally title-only, giving you control over the risk/coverage tradeoff.
-- **Stdlib-first, minimal dependencies** — pure Go on the standard library plus a small first-party shared-lib set (`health`, `httpx`) and `golang.org/x/sync`, minimizing supply-chain risk.
-- **Distroless and rootless** — runs as `nonroot` on `gcr.io/distroless/static` with no shell or package manager.
+- **Three run modes**: `SCHEDULE_INTERVAL` set to a Go duration like `24h` for a built-in timer, `SCHEDULE_INTERVAL=off` for resident-idle (stays healthy, awaits `docker exec ... tautulli-remap trigger`), or `tautulli-remap trigger` for a one-shot pass that reports its outcome via its exit code.
+- **Dry-run by default for safety**: no changes are applied until you explicitly set `DRY_RUN=false`, so you can always preview first.
+- **Matching strategies with increasing aggressiveness**: starts with the exact ones (episode-GUID resolution for shows, GUID match for movies), falls back to title+year, and optionally title-only, giving you control over the risk/coverage tradeoff.
+- **Stdlib-first, minimal dependencies**: pure Go on the standard library plus a first-party shared-lib set (`health`, `httpx`, `plexapi`, `scheduler`, `envx`, `slogx`, `runesafe`) and `golang.org/x/sync`, minimizing supply-chain risk.
+- **Distroless and rootless**: runs as `nonroot` on `gcr.io/distroless/static-debian13` with no shell or package manager.
 
 ## Quick start
 
-Images are published to both `ghcr.io/cplieger/tautulli-remap` and `docker.io/cplieger/tautulli-remap` — use whichever you prefer.
+Images are published to both `ghcr.io/cplieger/tautulli-remap` and `docker.io/cplieger/tautulli-remap`; use whichever you prefer.
 
 ```yaml
 services:
@@ -40,16 +40,13 @@ services:
     image: ghcr.io/cplieger/tautulli-remap:latest
     container_name: tautulli-remap
     restart: unless-stopped
-    user: "1000:1000"  # match your host user
 
     environment:
       TAUTULLI_URL: "http://tautulli:8181"
-      TAUTULLI_APIKEY: "your-tautulli-apikey"
+      TAUTULLI_APIKEY: "your-tautulli-apikey"  # required
       PLEX_URL: "http://plex:32400"
-      PLEX_TOKEN: "your-plex-token"
+      PLEX_TOKEN: "your-plex-token"  # required
       SCHEDULE_INTERVAL: "24h"  # Go duration; "off" = resident-idle
-      FALLBACK_TITLE_YEAR: "true"
-      FALLBACK_TITLE_ONLY: "false"  # risk of false matches
       DRY_RUN: "true"  # set to false to apply changes
 ```
 
@@ -64,7 +61,7 @@ services:
 | `SCHEDULE_INTERVAL`   | Go duration between remap runs (e.g. `24h`, `6h30m`). `off`/`disabled`/`0` = resident-idle (awaits external trigger via `tautulli-remap trigger`) | `off`                  | No       |
 | `FALLBACK_TITLE_YEAR` | Try title+year matching when GUID match fails                                                                                                     | `true`                 | No       |
 | `FALLBACK_TITLE_ONLY` | Try title-only matching as last resort (risk of false matches)                                                                                    | `false`                | No       |
-| `DRY_RUN`             | Log what would change without applying — set to false to apply                                                                                    | `true`                 | No       |
+| `DRY_RUN`             | Log what would change without applying; set to `false` to apply                                                                                  | `true`                 | No       |
 | `MAX_HISTORY_RECORDS` | Sanity cap on the Tautulli history size a run will process; runs abort above it. Raise it if your history is genuinely larger                     | `500000`               | No       |
 
 ## Subcommands
@@ -79,7 +76,7 @@ services:
 Remap passes are serialized by a cross-process lock (`/tmp/.remap.lock`): the
 built-in timer, an external `trigger`, and a manual `docker exec` can never run
 concurrent passes. A pass that finds another one already running refuses
-immediately — before contacting Tautulli or Plex — and reports failure (a
+immediately, before contacting Tautulli or Plex, and reports failure (a
 trigger exits 1; a scheduled pass counts it toward the unhealthy threshold),
 so a wedged pass surfaces through your scheduler's alerting instead of being
 silently skipped. Since passes are idempotent, simply re-run once the active
@@ -114,40 +111,25 @@ The container includes a built-in Docker healthcheck via the `/tautulli-remap he
 
 ## Security
 
-**No vulnerabilities found.** All scans clean across all scanners.
-
-| Tool                                                                | Result                           |
-| ------------------------------------------------------------------- | -------------------------------- |
-| [govulncheck](https://pkg.go.dev/golang.org/x/vuln/cmd/govulncheck) | No vulnerabilities in call graph |
-| [golangci-lint](https://golangci-lint.run/) (gosec, gocritic)       | 0 issues                         |
-| [trivy](https://trivy.dev/)                                         | 0 vulnerabilities                |
-| [grype](https://github.com/anchore/grype)                           | 0 vulnerabilities                |
-| [gitleaks](https://github.com/gitleaks/gitleaks)                    | No secrets detected              |
-| [semgrep](https://semgrep.dev/)                                     | 1 info (false positive)          |
-| [hadolint](https://github.com/hadolint/hadolint)                    | Clean                            |
-
-No network listener; connects outbound to Tautulli and Plex
+No network listener; the container connects outbound to Tautulli and Plex
 only. Set `DRY_RUN=true` on first run to preview changes safely.
-API tokens are never logged. Stdlib-first, with a minimal first-party
-dependency set.
-Runs as `nonroot` on a distroless base image with no shell,
-under the hardened compose profile
-(`read_only: true`, `cap_drop: [ALL]`,
-`no-new-privileges:true`, 16 MB tmpfs for `/tmp`).
 
-**Details for advanced users:** All HTTP clients use explicit
-timeouts (2 min client, 30s per direct request, 60s for the Plex
-library fetch). Transient failures on Tautulli and Plex reads are
-retried with bounded backoff (each attempt within the 2-min client
-timeout); mutating Tautulli calls are never retried.
-Response bodies capped
-via `io.LimitReader` (30 MB Tautulli, 40 MB Plex library / 10 MB sections). Rating keys
-validated as numeric before URL interpolation (prevents path
-traversal). Plex token sent via `X-Plex-Token` header, not query
-string. HTTP error messages sanitized to strip query parameters
-(prevents API key leakage in logs). No `unsafe`, `reflect`,
-`os/exec`, or file I/O beyond the health marker and the run lock
-(both on `/tmp`).
+API tokens never reach the logs: the Plex token travels in the
+`X-Plex-Token` header rather than the query string, and HTTP error messages
+strip query parameters so the Tautulli API key cannot leak. Rating keys are
+validated as numeric before URL interpolation, which blocks path traversal.
+All HTTP calls use explicit timeouts and capped response bodies; transient
+failures on reads are retried with bounded backoff, and mutating Tautulli
+calls are never retried. The code uses no `unsafe`, `reflect`, or `os/exec`,
+and its only file I/O is the health marker and run lock on `/tmp`.
+
+The image runs as `nonroot` on a distroless base with no shell or package
+manager. For a hardened deployment, add `read_only: true`, `cap_drop: [ALL]`,
+`no-new-privileges:true`, and a small tmpfs for `/tmp` (16 MB covers the
+health marker and run lock).
+
+Live scan results are on the repository's Security tab. One accepted
+finding: semgrep reports a single informational hit, a false positive.
 
 ## Dependencies
 
@@ -163,6 +145,7 @@ All dependencies are updated automatically via [Renovate](https://github.com/ren
 | scheduler                | [cplieger/scheduler](https://github.com/cplieger/scheduler)      | Cross-process run lock                      |
 | envx                     | [cplieger/envx](https://github.com/cplieger/envx)                | Env var parsing                             |
 | slogx                    | [cplieger/slogx](https://github.com/cplieger/slogx)              | Logging setup                               |
+| runesafe                 | [cplieger/runesafe](https://github.com/cplieger/runesafe)        | Untrusted-string tagging (Plex titles)      |
 | golang.org/x/sync        | [x/sync](https://pkg.go.dev/golang.org/x/sync)                   | Bounded concurrency (errgroup)              |
 | rapid                    | [pgregory.net/rapid](https://github.com/flyingmutant/rapid)      | Property-based tests (test-only)            |
 
@@ -184,4 +167,4 @@ This project was built with AI-assisted tooling using [Claude](https://claude.co
 
 ## License
 
-This project is licensed under the [GNU General Public License v3.0](LICENSE).
+GPL-3.0-or-later. See [LICENSE](LICENSE).
