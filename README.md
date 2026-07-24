@@ -52,23 +52,23 @@ services:
 
 ## Configuration reference
 
-| Variable              | Description                                                                                                                                       | Default                | Required |
-| --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------- | -------- |
-| `TAUTULLI_URL`        | Tautulli instance URL (Docker DNS name or LAN IP)                                                                                                 | `http://tautulli:8181` | No       |
-| `TAUTULLI_APIKEY`     | Tautulli API key (Settings → Web Interface → API Key)                                                                                             | -                      | Yes      |
-| `PLEX_URL`            | Plex Media Server URL (Docker DNS name or LAN IP)                                                                                                 | `http://plex:32400`    | No       |
-| `PLEX_TOKEN`          | Plex authentication token (see Plex support article)                                                                                              | -                      | Yes      |
-| `SCHEDULE_INTERVAL`   | Go duration between remap runs (e.g. `24h`, `6h30m`). `off`/`disabled`/`0` = resident-idle (awaits external trigger via `tautulli-remap trigger`) | `off`                  | No       |
-| `FALLBACK_TITLE_YEAR` | Try title+year matching when GUID match fails                                                                                                     | `true`                 | No       |
-| `FALLBACK_TITLE_ONLY` | Try title-only matching as last resort (risk of false matches)                                                                                    | `false`                | No       |
-| `DRY_RUN`             | Log what would change without applying; set to `false` to apply                                                                                  | `true`                 | No       |
-| `MAX_HISTORY_RECORDS` | Sanity cap on the Tautulli history size a run will process; runs abort above it. Raise it if your history is genuinely larger                     | `500000`               | No       |
+| Variable | Description | Default | Required |
+| --- | --- | --- | --- |
+| `TAUTULLI_URL` | Tautulli instance URL (Docker DNS name or LAN IP) | `http://tautulli:8181` | No |
+| `TAUTULLI_APIKEY` | Tautulli API key (Settings → Web Interface → API Key) | - | Yes |
+| `PLEX_URL` | Plex Media Server URL (Docker DNS name or LAN IP) | `http://plex:32400` | No |
+| `PLEX_TOKEN` | Plex authentication token (see Plex support article) | - | Yes |
+| `SCHEDULE_INTERVAL` | Go duration between remap runs (e.g. `24h`, `6h30m`). `off`/`disabled`/`0` = resident-idle (awaits external trigger via `tautulli-remap trigger`) | `off` | No |
+| `FALLBACK_TITLE_YEAR` | Try title+year matching when GUID match fails | `true` | No |
+| `FALLBACK_TITLE_ONLY` | Try title-only matching as last resort (risk of false matches) | `false` | No |
+| `DRY_RUN` | Log what would change without applying; set to `false` to apply | `true` | No |
+| `MAX_HISTORY_RECORDS` | Sanity cap on the Tautulli history size a run will process; runs abort above it. Raise it if your history is genuinely larger | `500000` | No |
 
 ## Subcommands
 
-| Subcommand               | Description                                                                                                                                                                                |
-| ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `tautulli-remap health`  | Checks the `/tmp/.healthy` marker file. Used as the Docker `HEALTHCHECK`. Exits 0 (healthy) or 1 (unhealthy).                                                                              |
+| Subcommand | Description |
+| --- | --- |
+| `tautulli-remap health` | Checks the `/tmp/.healthy` marker file. Used as the Docker `HEALTHCHECK`. Exits 0 (healthy) or 1 (unhealthy). |
 | `tautulli-remap trigger` | Executes a single remap pass immediately. Exits 0 on success, 1 on failure, 3 when interrupted by shutdown before completing (retryable). Designed for `docker exec` or Ofelia `job-exec`. |
 
 ### One pass at a time
@@ -135,19 +135,19 @@ finding: semgrep reports a single informational hit, a false positive.
 
 All dependencies are updated automatically via [Renovate](https://github.com/renovatebot/renovate) and pinned by digest or version for reproducibility.
 
-| Dependency               | Source                                                           | Role                                        |
-| ------------------------ | ---------------------------------------------------------------- | ------------------------------------------- |
-| golang                   | [Go](https://hub.docker.com/_/golang)                            | Build image                                 |
-| gcr.io/distroless/static | [Distroless](https://github.com/GoogleContainerTools/distroless) | Runtime base image                          |
-| health                   | [cplieger/health](https://github.com/cplieger/health)            | File-marker healthcheck                     |
-| httpx                    | [cplieger/httpx](https://github.com/cplieger/httpx)              | Retrying HTTP + secret redaction (Tautulli) |
-| plexapi                  | [cplieger/plexapi](https://github.com/cplieger/plexapi)          | Plex API client                             |
-| scheduler                | [cplieger/scheduler](https://github.com/cplieger/scheduler)      | Cross-process run lock                      |
-| envx                     | [cplieger/envx](https://github.com/cplieger/envx)                | Env var parsing                             |
-| slogx                    | [cplieger/slogx](https://github.com/cplieger/slogx)              | Logging setup                               |
-| runesafe                 | [cplieger/runesafe](https://github.com/cplieger/runesafe)        | Untrusted-string tagging (Plex titles)      |
-| golang.org/x/sync        | [x/sync](https://pkg.go.dev/golang.org/x/sync)                   | Bounded concurrency (errgroup)              |
-| rapid                    | [pgregory.net/rapid](https://github.com/flyingmutant/rapid)      | Property-based tests (test-only)            |
+| Dependency | Source | Role |
+| --- | --- | --- |
+| golang | [Go](https://hub.docker.com/_/golang) | Build image |
+| gcr.io/distroless/static | [Distroless](https://github.com/GoogleContainerTools/distroless) | Runtime base image |
+| health | [cplieger/health](https://github.com/cplieger/health) | File-marker healthcheck |
+| httpx | [cplieger/httpx](https://github.com/cplieger/httpx) | Retrying HTTP + secret redaction (Tautulli) |
+| plexapi | [cplieger/plexapi](https://github.com/cplieger/plexapi) | Plex API client |
+| scheduler | [cplieger/scheduler](https://github.com/cplieger/scheduler) | Cross-process run lock |
+| envx | [cplieger/envx](https://github.com/cplieger/envx) | Env var parsing |
+| slogx | [cplieger/slogx](https://github.com/cplieger/slogx) | Logging setup |
+| runesafe | [cplieger/runesafe](https://github.com/cplieger/runesafe) | Untrusted-string tagging (Plex titles) |
+| golang.org/x/sync | [x/sync](https://pkg.go.dev/golang.org/x/sync) | Bounded concurrency (errgroup) |
+| rapid | [pgregory.net/rapid](https://github.com/flyingmutant/rapid) | Property-based tests (test-only) |
 
 ## Credits
 
