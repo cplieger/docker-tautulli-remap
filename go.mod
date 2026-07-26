@@ -22,6 +22,6 @@ require (
 )
 
 require (
-	github.com/cplieger/httpx/v3 v3.2.0 // indirect
+	github.com/cplieger/httpx/v4 v4.1.0 // indirect
 	github.com/cplieger/xmlx v1.0.0 // indirect
 )
