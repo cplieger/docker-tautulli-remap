@@ -11,7 +11,7 @@ import (
 	"net/url"
 	"time"
 
-	"github.com/cplieger/httpx/v3"
+	"github.com/cplieger/httpx/v4"
 	"github.com/cplieger/tautulli-remap/internal/remap"
 )
 

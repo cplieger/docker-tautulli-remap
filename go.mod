@@ -17,8 +17,11 @@ require (
 )
 
 require (
-	github.com/cplieger/httpx/v3 v3.2.0
+	github.com/cplieger/httpx/v4 v4.1.0
 	github.com/cplieger/runesafe v1.2.1
 )
 
-require github.com/cplieger/xmlx v1.0.0 // indirect
+require (
+	github.com/cplieger/httpx/v3 v3.2.0 // indirect
+	github.com/cplieger/xmlx v1.0.0 // indirect
+)

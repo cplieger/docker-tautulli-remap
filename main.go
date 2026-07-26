@@ -13,7 +13,7 @@ import (
 	"time"
 
 	"github.com/cplieger/health"
-	"github.com/cplieger/httpx/v3"
+	"github.com/cplieger/httpx/v4"
 	"github.com/cplieger/slogx"
 	appconfig "github.com/cplieger/tautulli-remap/internal/config"
 	"github.com/cplieger/tautulli-remap/internal/orchestrator"
