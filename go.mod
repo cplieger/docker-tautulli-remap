@@ -10,8 +10,8 @@ require (
 )
 
 require (
-	github.com/cplieger/envx v1.2.2
-	github.com/cplieger/plexapi v1.3.2
+	github.com/cplieger/envx v1.3.0
+	github.com/cplieger/plexapi v1.3.3
 	github.com/cplieger/scheduler/v3 v3.0.0
 	github.com/cplieger/slogx v1.4.0
 )
@@ -20,3 +20,5 @@ require (
 	github.com/cplieger/httpx/v3 v3.2.0
 	github.com/cplieger/runesafe v1.2.1
 )
+
+require github.com/cplieger/xmlx v1.0.0 // indirect
