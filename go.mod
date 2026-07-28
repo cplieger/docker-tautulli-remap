@@ -17,7 +17,7 @@ require (
 )
 
 require (
-	github.com/cplieger/httpx/v4 v4.2.0
+	github.com/cplieger/httpx/v4 v4.2.1
 	github.com/cplieger/runesafe v1.2.1
 )
 
