@@ -2,7 +2,6 @@ package remap
 
 import (
 	"encoding/json"
-	"fmt"
 	"strconv"
 
 	"github.com/cplieger/runesafe"
@@ -28,17 +27,6 @@ func ParseMediaType(s string) MediaType {
 		return MediaType(s)
 	default:
 		return ""
-	}
-}
-
-// UnmarshalText implements encoding.TextUnmarshaler.
-func (m *MediaType) UnmarshalText(text []byte) error {
-	switch MediaType(text) {
-	case Movie, Show, Episode:
-		*m = MediaType(text)
-		return nil
-	default:
-		return fmt.Errorf("unknown media type: %q", text)
 	}
 }
 
@@ -173,9 +161,9 @@ type HistoryItem struct {
 	GUID             string             `json:"guid"`
 	// MediaType is decoded as a plain string rather than the MediaType type so a
 	// row with an unexpected value (music "track", "clip", live TV, or a future
-	// type) does not fail the whole page decode through MediaType's strict
-	// UnmarshalText. ProcessHistoryRow validates it via ParseMediaType and skips
-	// unknown types, keeping the wire boundary as fail-open as the processing.
+	// type) does not fail the whole page decode. ProcessHistoryRow validates it
+	// via ParseMediaType and skips unknown types, keeping the wire boundary as
+	// fail-open as the processing.
 	MediaType            string  `json:"media_type"`
 	RatingKey            FlexInt `json:"rating_key"`
 	Year                 FlexInt `json:"year"`

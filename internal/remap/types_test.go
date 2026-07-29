@@ -34,16 +34,6 @@ func TestMediaType(t *testing.T) {
 	if Movie.String() != "movie" {
 		t.Errorf("Movie.String() = %q", Movie.String())
 	}
-	var m MediaType
-	if err := m.UnmarshalText([]byte("show")); err != nil {
-		t.Fatal(err)
-	}
-	if m != Show {
-		t.Errorf("got %q", m)
-	}
-	if err := m.UnmarshalText([]byte("invalid")); err == nil {
-		t.Error("expected error for invalid media type")
-	}
 }
 
 // TestParseMediaType pins the public string-to-MediaType mapping, including the

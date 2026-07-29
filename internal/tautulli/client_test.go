@@ -531,10 +531,10 @@ func TestDeleteRecentlyAdded_APIErrorPropagates(t *testing.T) {
 // a get_history page carrying a row with an unexpected media_type ("track")
 // alongside valid movie/episode rows must decode WITHOUT error, and the
 // unknown-type row is skipped by ProcessHistoryRow while the valid rows are
-// processed. media_type decodes as a plain string, so the strict
-// MediaType.UnmarshalText no longer runs at the wire boundary; previously it
-// failed the entire json.Unmarshal on the first unknown row, aborting
-// pagination and silently zeroing out the whole remap run.
+// processed. media_type decodes as a plain string, so no strict per-row type
+// validation runs at the wire boundary; when it did, the first unknown row
+// failed the entire json.Unmarshal, aborting pagination and silently zeroing
+// out the whole remap run.
 func TestGetHistory_UnknownMediaTypeRowSkipped(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Write([]byte(`{"response":{"result":"success","data":{
