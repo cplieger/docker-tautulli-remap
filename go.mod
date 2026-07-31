@@ -18,6 +18,7 @@ require (
 
 require (
 	github.com/cplieger/httpx/v4 v4.2.1
+	github.com/cplieger/keyenc v1.0.0
 	github.com/cplieger/runesafe v1.3.0
 )
 

@@ -176,10 +176,10 @@ func FuzzMatchOne(f *testing.F) {
 			"tvdb://12345":     {RatingKey: "300", Title: "S", Year: "2021", Type: Show},
 		}
 		byTitleYear := map[string]PlexEntry{
-			"test movie|2020|movie": {RatingKey: "400", Title: "Test Movie", Year: "2020", Type: Movie},
+			titleYearKey("test movie", "2020", Movie): {RatingKey: "400", Title: "Test Movie", Year: "2020", Type: Movie},
 		}
 		byTitle := map[string]PlexEntry{
-			"show title|show": {RatingKey: "500", Title: "Show Title", Year: "2021", Type: Show},
+			titleKey("show title", Show): {RatingKey: "500", Title: "Show Title", Year: "2021", Type: Show},
 		}
 		validKeys := map[string]bool{"200": true, "300": true, "400": true, "500": true}
 
