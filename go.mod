@@ -11,7 +11,7 @@ require (
 
 require (
 	github.com/cplieger/envx v1.5.1
-	github.com/cplieger/plexapi v1.3.6
+	github.com/cplieger/plexapi v1.3.7
 	github.com/cplieger/scheduler/v3 v3.0.0
 	github.com/cplieger/slogx v1.6.0
 )
