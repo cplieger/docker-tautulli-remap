@@ -5,8 +5,11 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"slices"
 	"strings"
 	"testing"
+
+	"github.com/cplieger/keyenc"
 )
 
 // collidingFetcher returns its sections and per-section items verbatim, so a test can place two
@@ -48,11 +51,11 @@ func TestBuildPlexIndex_TitleYearCollisionRefusesToMatch(t *testing.T) {
 	// A collision on the title+year and title keys means the slot is ambiguous,
 	// so it is removed entirely (refuse to match) rather than resolved by the
 	// last writer.
-	if _, ok := byTitleYear["heat|1995|movie"]; ok {
-		t.Errorf("byTitleYear[heat|1995|movie] = %q, want ABSENT (ambiguous slot must be removed)", byTitleYear["heat|1995|movie"].RatingKey)
+	if _, ok := byTitleYear[titleYearKey("heat", "1995", Movie)]; ok {
+		t.Errorf("byTitleYear[(heat, 1995, movie)] = %q, want ABSENT (ambiguous slot must be removed)", byTitleYear[titleYearKey("heat", "1995", Movie)].RatingKey)
 	}
-	if _, ok := byTitle["heat|movie"]; ok {
-		t.Errorf("byTitle[heat|movie] = %q, want ABSENT (ambiguous slot must be removed)", byTitle["heat|movie"].RatingKey)
+	if _, ok := byTitle[titleKey("heat", Movie)]; ok {
+		t.Errorf("byTitle[(heat, movie)] = %q, want ABSENT (ambiguous slot must be removed)", byTitle[titleKey("heat", Movie)].RatingKey)
 	}
 	// The two GUIDs are distinct, so neither collided; both are kept.
 	if got := byGUID["imdb://tt0001"].RatingKey; got != "1" {
@@ -88,8 +91,8 @@ func TestBuildPlexIndex_SameKeyReindexedNoShadow(t *testing.T) {
 
 	_, byTitleYear, _, _ := BuildPlexIndex(context.Background(), fetcher, 1)
 
-	if got := byTitleYear["dune|2021|movie"].RatingKey; got != "7" {
-		t.Errorf("byTitleYear[dune|2021|movie].RatingKey = %q, want %q", got, "7")
+	if got := byTitleYear[titleYearKey("dune", "2021", Movie)].RatingKey; got != "7" {
+		t.Errorf("byTitleYear[(dune, 2021, movie)].RatingKey = %q, want %q", got, "7")
 	}
 	if strings.Contains(buf.String(), "shadow") {
 		t.Errorf("did not expect a shadow log for an idempotent same-key re-add, got:\n%s", buf.String())
@@ -144,7 +147,7 @@ func TestBuildPlexIndex_ReportsFailedSections(t *testing.T) {
 	if failed != 1 {
 		t.Errorf("failedSections = %d, want 1 (one section errored)", failed)
 	}
-	if _, ok := byTitleYear["heat|1995|movie"]; !ok {
+	if _, ok := byTitleYear[titleYearKey("heat", "1995", Movie)]; !ok {
 		t.Error("expected the section that loaded to still be indexed")
 	}
 }
@@ -209,8 +212,8 @@ func TestBuildPlexIndex_ParallelismBelowOneStillIndexes(t *testing.T) {
 	if got := byGUID["imdb://tt0113277"].RatingKey; got != "1" {
 		t.Errorf("byGUID[imdb://tt0113277].RatingKey = %q, want %q (indexed despite parallelism=0)", got, "1")
 	}
-	if got := byTitleYear["heat|1995|movie"].RatingKey; got != "1" {
-		t.Errorf("byTitleYear[heat|1995|movie].RatingKey = %q, want %q", got, "1")
+	if got := byTitleYear[titleYearKey("heat", "1995", Movie)].RatingKey; got != "1" {
+		t.Errorf("byTitleYear[(heat, 1995, movie)].RatingKey = %q, want %q", got, "1")
 	}
 }
 
@@ -283,12 +286,12 @@ func TestBuildPlexIndex_SkipsNonMovieShowSections(t *testing.T) {
 		t.Error("non-movie/show (artist) section must be skipped, but its GUID was indexed")
 	}
 	// If the skip guard regressed, the artist item would be indexed with an
-	// empty media type (ParseMediaType("artist") == ""), i.e. under "some album|"
-	// and "some album|2001|". Assert those exact slots stay absent.
-	if _, ok := byTitle["some album|"]; ok {
+	// empty media type (ParseMediaType("artist") == ""), i.e. under the (some album, "") and
+	// (some album, 2001, "") slots. Assert those exact slots stay absent.
+	if _, ok := byTitle[titleKey("some album", MediaType(""))]; ok {
 		t.Error("non-movie/show (artist) section must be skipped, but its title was indexed")
 	}
-	if _, ok := byTitleYear["some album|2001|"]; ok {
+	if _, ok := byTitleYear[titleYearKey("some album", "2001", MediaType(""))]; ok {
 		t.Error("non-movie/show (artist) section must be skipped, but its title+year was indexed")
 	}
 }
@@ -313,14 +316,14 @@ func TestBuildPlexIndex_TitleOnlyCollisionKeepsTitleYearMatchable(t *testing.T) 
 	if failed != 0 {
 		t.Errorf("failedSections = %d, want 0 (fetcher never errors)", failed)
 	}
-	if _, ok := byTitle["dune|movie"]; ok {
-		t.Errorf("byTitle[dune|movie] = %q, want ABSENT (title-only slot is ambiguous)", byTitle["dune|movie"].RatingKey)
+	if _, ok := byTitle[titleKey("dune", Movie)]; ok {
+		t.Errorf("byTitle[(dune, movie)] = %q, want ABSENT (title-only slot is ambiguous)", byTitle[titleKey("dune", Movie)].RatingKey)
 	}
-	if got := byTitleYear["dune|2021|movie"].RatingKey; got != "1" {
-		t.Errorf("byTitleYear[dune|2021|movie].RatingKey = %q, want %q (non-colliding title+year slot must stay matchable)", got, "1")
+	if got := byTitleYear[titleYearKey("dune", "2021", Movie)].RatingKey; got != "1" {
+		t.Errorf("byTitleYear[(dune, 2021, movie)].RatingKey = %q, want %q (non-colliding title+year slot must stay matchable)", got, "1")
 	}
-	if got := byTitleYear["dune|1984|movie"].RatingKey; got != "2" {
-		t.Errorf("byTitleYear[dune|1984|movie].RatingKey = %q, want %q (non-colliding title+year slot must stay matchable)", got, "2")
+	if got := byTitleYear[titleYearKey("dune", "1984", Movie)].RatingKey; got != "2" {
+		t.Errorf("byTitleYear[(dune, 1984, movie)].RatingKey = %q, want %q (non-colliding title+year slot must stay matchable)", got, "2")
 	}
 	if got := byGUID["imdb://tt1"].RatingKey; got != "1" {
 		t.Errorf("byGUID[imdb://tt1].RatingKey = %q, want %q", got, "1")
@@ -333,7 +336,7 @@ func TestBuildPlexIndex_TitleOnlyCollisionKeepsTitleYearMatchable(t *testing.T) 
 func TestMatch_CrossTypeSameTitleYear_RecoversMovieMatch(t *testing.T) {
 	// Plex holds a Movie "Dune" 2021 (key 10) AND a Show "Dune" 2021 (key 20).
 	// Before the index keys folded in media type, both occupied the title+year
-	// key "dune|2021" and collided, so the slot was pruned (refuse-to-match) and
+	// key (dune, 2021) and collided, so the slot was pruned (refuse-to-match) and
 	// a stale Movie "Dune" 2021 whose GUID no longer resolves was MISSED. With
 	// the media type in the key the two occupy distinct slots, so the stale Movie
 	// now matches the Movie (key 10) and never the Show.
@@ -353,11 +356,11 @@ func TestMatch_CrossTypeSameTitleYear_RecoversMovieMatch(t *testing.T) {
 		t.Fatalf("failedSections = %d, want 0 (fetcher never errors)", failed)
 	}
 	// Both type-specific title+year slots survive: distinct keys, no collision.
-	if got := byTitleYear["dune|2021|movie"].RatingKey; got != "10" {
-		t.Errorf("byTitleYear[dune|2021|movie] = %q, want 10 (movie slot must survive cross-type coexistence)", got)
+	if got := byTitleYear[titleYearKey("dune", "2021", Movie)].RatingKey; got != "10" {
+		t.Errorf("byTitleYear[(dune, 2021, movie)] = %q, want 10 (movie slot must survive cross-type coexistence)", got)
 	}
-	if got := byTitleYear["dune|2021|show"].RatingKey; got != "20" {
-		t.Errorf("byTitleYear[dune|2021|show] = %q, want 20 (show slot must survive cross-type coexistence)", got)
+	if got := byTitleYear[titleYearKey("dune", "2021", Show)].RatingKey; got != "20" {
+		t.Errorf("byTitleYear[(dune, 2021, show)] = %q, want 20 (show slot must survive cross-type coexistence)", got)
 	}
 
 	// Stale Movie whose GUID no longer resolves (absent from byGUID) falls back
@@ -379,7 +382,7 @@ func TestMatch_CrossTypeSameTitleYear_RecoversMovieMatch(t *testing.T) {
 
 func TestMatch_SameTypeTitleYearTwin_StillRefusesToMatch(t *testing.T) {
 	// Companion to the cross-type recovery test: two Movies "Dune" 2021 (keys 10
-	// and 11) genuinely collide on the type-keyed slot "dune|2021|movie", so it
+	// and 11) genuinely collide on the type-keyed slot (dune, 2021, movie), so it
 	// stays pruned and a stale Movie "Dune" 2021 remains unmatched. Folding the
 	// media type into the key must not weaken same-type ambiguity detection.
 	fetcher := &collidingFetcher{
@@ -396,8 +399,8 @@ func TestMatch_SameTypeTitleYearTwin_StillRefusesToMatch(t *testing.T) {
 	if failed != 0 {
 		t.Fatalf("failedSections = %d, want 0 (fetcher never errors)", failed)
 	}
-	if _, ok := byTitleYear["dune|2021|movie"]; ok {
-		t.Errorf("byTitleYear[dune|2021|movie] present, want ABSENT (same-type twins must refuse-to-match)")
+	if _, ok := byTitleYear[titleYearKey("dune", "2021", Movie)]; ok {
+		t.Errorf("byTitleYear[(dune, 2021, movie)] present, want ABSENT (same-type twins must refuse-to-match)")
 	}
 
 	stale := map[string]TautulliEntry{
@@ -489,5 +492,240 @@ func TestBuildPlexIndex_OmitsRefusalSummaryWhenNoKeysAreAmbiguous(t *testing.T) 
 
 	if strings.Contains(buf.String(), "refused to match ambiguous index keys") {
 		t.Errorf("did not expect the ambiguity-refusal summary for a collision-free index, got:\n%s", buf.String())
+	}
+}
+
+// legacyTitleYearKey and legacyTitleKey are the exact pre-keyenc expressions
+// the two index-key helpers used: '|' concatenation with no escaping. They are
+// the oracles for the tests below, which pin what the keyenc adoption did and
+// did not change.
+func legacyTitleYearKey(normalizedTitle, year string, mediaType MediaType) string {
+	return normalizedTitle + "|" + year + "|" + string(mediaType)
+}
+
+func legacyTitleKey(normalizedTitle string, mediaType MediaType) string {
+	return normalizedTitle + "|" + string(mediaType)
+}
+
+// TestIndexKeysOrdinaryInputIsPlainSeparatorJoin pins the shape of both index
+// keys for ordinary input: keyenc adds no escaping, no hashing and no other
+// decoration to components carrying neither ':' nor '\', so each key is exactly
+// its components joined by ':'. Equivalently, it is the legacy key with '|'
+// swapped for ':' and nothing else altered — the one intended byte change of
+// the adoption, free because these indexes are rebuilt in memory by every
+// BuildPlexIndex call and never persisted or compared across runs.
+//
+// "Ordinary" is narrower here than at a site keyed on numeric IDs: because the
+// new separator is ':', a title that contains a colon is NOT ordinary input, and
+// film titles contain colons constantly ("Dune: Part Two"). Those keys gain a
+// real escape — see TestIndexKeysColonBearingTitleIsEscapedAndFaithful, which
+// pins that half.
+func TestIndexKeysOrdinaryInputIsPlainSeparatorJoin(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name      string
+		title     string
+		year      string
+		mediaType MediaType
+	}{
+		{name: "movie", title: "the matrix", year: "1999", mediaType: Movie},
+		{name: "show", title: "heat", year: "1995", mediaType: Show},
+		{name: "episode", title: "pilot", year: "2008", mediaType: Episode},
+		{name: "unknown media type", title: "some album", year: "2001", mediaType: MediaType("")},
+		{name: "empty title", title: "", year: "2020", mediaType: Movie},
+		{name: "title with spaces and punctuation", title: "dune, part two", year: "2024", mediaType: Movie},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			wantTY := tt.title + ":" + tt.year + ":" + string(tt.mediaType)
+			if got := titleYearKey(tt.title, tt.year, tt.mediaType); got != wantTY {
+				t.Errorf("titleYearKey(%q, %q, %q) = %q, want %q", tt.title, tt.year, tt.mediaType, got, wantTY)
+			}
+			wantT := tt.title + ":" + string(tt.mediaType)
+			if got := titleKey(tt.title, tt.mediaType); got != wantT {
+				t.Errorf("titleKey(%q, %q) = %q, want %q", tt.title, tt.mediaType, got, wantT)
+			}
+			// Nothing but the separator changed relative to the old encoder.
+			if got, want := titleYearKey(tt.title, tt.year, tt.mediaType),
+				strings.ReplaceAll(legacyTitleYearKey(tt.title, tt.year, tt.mediaType), "|", ":"); got != want {
+				t.Errorf("titleYearKey(%q, %q, %q) = %q, want the legacy key with '|' -> ':' = %q",
+					tt.title, tt.year, tt.mediaType, got, want)
+			}
+			if got, want := titleKey(tt.title, tt.mediaType),
+				strings.ReplaceAll(legacyTitleKey(tt.title, tt.mediaType), "|", ":"); got != want {
+				t.Errorf("titleKey(%q, %q) = %q, want the legacy key with '|' -> ':' = %q",
+					tt.title, tt.mediaType, got, want)
+			}
+		})
+	}
+}
+
+// TestIndexKeysColonBearingTitleIsEscapedAndFaithful covers the input class the
+// previous test excludes, and it is the common case rather than an exotic one:
+// a film title with a colon. Under the old '|' separator such a title was
+// incidentally safe; under ':' it is the escaping that keeps the key correct,
+// so this pins that the escape is applied and is faithful — the components come
+// back out of the key exactly as they went in, and two colon-bearing titles
+// that differ only in where the colon sits stay in distinct slots.
+func TestIndexKeysColonBearingTitleIsEscapedAndFaithful(t *testing.T) {
+	t.Parallel()
+	const (
+		title = "dune: part two"
+		year  = "2024"
+	)
+	key := titleYearKey(title, year, Movie)
+
+	if !strings.Contains(key, `\:`) {
+		t.Errorf("titleYearKey(%q, ...) = %q, want the colon inside the title escaped", title, key)
+	}
+	if keyenc.IsHashed(key) {
+		t.Errorf("titleYearKey(%q, ...) = %q, want an escaped join, not a hashed identity", title, key)
+	}
+	parts, err := keyenc.Split(key)
+	if err != nil {
+		t.Fatalf("keyenc.Split(%q) error = %v, want the key to be its own inverse", key, err)
+	}
+	want := []string{title, year, string(Movie)}
+	if !slices.Equal(parts, want) {
+		t.Errorf("keyenc.Split(%q) = %q, want %q (the components must survive the round trip)", key, parts, want)
+	}
+
+	// Two titles differing only in colon placement must not share a slot.
+	if a, b := titleYearKey("mission: impossible", year, Movie),
+		titleYearKey("mission", ": impossible", Movie); a == b {
+		t.Errorf("titles differing in colon placement must not share a slot, both = %q", a)
+	}
+}
+
+// TestIndexKeysSeparatorCannotForgeAnotherSlot pins the property the adoption
+// buys: no component's content can spell another tuple's key. The title is the
+// free-form component — lower-cased and trimmed Plex metadata, arbitrary
+// operator- and agent-supplied text — and under plain concatenation a title
+// carrying the separator could spell the rest of another entry's key.
+//
+// A collision in these maps is a merged identity, not a cache miss: two
+// different Plex items landing in one slot either get pruned by the ambiguity
+// guard (silently refusing a legitimate remap) or resolve a history item to the
+// wrong entry, and live mode then writes that wrong rating key into Tautulli's
+// database.
+//
+// Reachability, stated honestly: the forging cases below need TWO components to
+// carry the separator, and today only the title can — year is strconv.Itoa of an
+// int and mediaType is one of ParseMediaType's values. So these tuples are not
+// producible by the current pipeline, and the test guards the encoder against
+// exactly the change titleYearKey's doc comment warns about (a free-form
+// component appended, or year widened to a range), where the failure would be a
+// silent wrong database write.
+func TestIndexKeysSeparatorCannotForgeAnotherSlot(t *testing.T) {
+	t.Parallel()
+
+	t.Run("titleYearKey: separator shifted across the title/year boundary", func(t *testing.T) {
+		t.Parallel()
+		// ("dune|2021", "extended") vs ("dune", "2021|extended"): same legacy
+		// bytes, because '|' inside a component was indistinguishable from the
+		// '|' the encoder inserted.
+		legacyA := legacyTitleYearKey("dune|2021", "extended", Movie)
+		legacyB := legacyTitleYearKey("dune", "2021|extended", Movie)
+		if legacyA != legacyB {
+			t.Fatalf("premise broken: the legacy form was expected to collide, got %q and %q", legacyA, legacyB)
+		}
+		gotA := titleYearKey("dune|2021", "extended", Movie)
+		gotB := titleYearKey("dune", "2021|extended", Movie)
+		if gotA == gotB {
+			t.Errorf("a title carrying the separator must not forge another slot, both = %q", gotA)
+		}
+		// And the same must hold for the separator keyenc actually joins on.
+		if a, b := titleYearKey("dune:2021", "extended", Movie),
+			titleYearKey("dune", "2021:extended", Movie); a == b {
+			t.Errorf("a title carrying ':' must not forge another slot either, both = %q", a)
+		}
+	})
+
+	t.Run("titleKey: separator shifted across the title/type boundary", func(t *testing.T) {
+		t.Parallel()
+		legacyA := legacyTitleKey("dune|movie", MediaType(""))
+		legacyB := legacyTitleKey("dune", MediaType("movie|"))
+		if legacyA != legacyB {
+			t.Fatalf("premise broken: the legacy form was expected to collide, got %q and %q", legacyA, legacyB)
+		}
+		gotA := titleKey("dune|movie", MediaType(""))
+		gotB := titleKey("dune", MediaType("movie|"))
+		if gotA == gotB {
+			t.Errorf("a title carrying the separator must not forge another pair, both = %q", gotA)
+		}
+		if a, b := titleKey("dune:movie", MediaType("")),
+			titleKey("dune", MediaType("movie:")); a == b {
+			t.Errorf("a title carrying ':' must not forge another pair either, both = %q", a)
+		}
+	})
+
+	t.Run("distinct tuples stay distinct across both indexes", func(t *testing.T) {
+		t.Parallel()
+		type tuple struct {
+			title     string
+			year      string
+			mediaType MediaType
+		}
+		tuples := []tuple{
+			{"dune", "2021", Movie},
+			{"dune", "2021", Show},
+			{"dune|2021", "movie", MediaType("")},
+			{"dune:2021", "movie", MediaType("")},
+			{`dune\`, "2021", Movie},
+			{`dune\:2021`, "movie", MediaType("")},
+			{"dune", "2021", MediaType("")},
+			{"", "2021", Movie},
+			{"dune 2021", "", Movie},
+			{"dune: part two", "2024", Movie},
+			{"dune", ": part two:2024", Movie},
+		}
+		seenTY := make(map[string]tuple, len(tuples))
+		seenT := make(map[string]tuple, len(tuples))
+		for _, tp := range tuples {
+			ty := titleYearKey(tp.title, tp.year, tp.mediaType)
+			if prev, dup := seenTY[ty]; dup {
+				t.Errorf("titleYearKey collapsed distinct tuples %+v and %+v onto %q", prev, tp, ty)
+			} else {
+				seenTY[ty] = tp
+			}
+			// The byTitle index drops the year, so only tuples differing in
+			// (title, mediaType) are required to differ here.
+			k := titleKey(tp.title, tp.mediaType)
+			if prev, dup := seenT[k]; dup && (prev.title != tp.title || prev.mediaType != tp.mediaType) {
+				t.Errorf("titleKey collapsed distinct pairs %+v and %+v onto %q", prev, tp, k)
+			} else if !dup {
+				seenT[k] = tp
+			}
+		}
+	})
+}
+
+// TestIndexKeysBuilderAndLookupAgree pins the invariant the two helpers exist
+// for: the key BuildPlexIndex stores an entry under is the same key matchOne
+// looks it up by. Both call the helpers, so this holds by construction — the
+// test is the regression guard for anyone who reintroduces a hand-built key at
+// either end, where the failure mode is silent (every lookup misses and no
+// stale item is ever remapped).
+func TestIndexKeysBuilderAndLookupAgree(t *testing.T) {
+	t.Parallel()
+	fetcher := &collidingFetcher{
+		sections: []Section{{Key: "1", Title: "Movies", Type: string(Movie)}},
+		items: map[string][]LibItem{
+			"1": {{RatingKey: 42, Title: "Dune | Extended Edition", Year: 2021}},
+		},
+	}
+	_, byTitleYear, byTitle, failed := BuildPlexIndex(context.Background(), fetcher, 1)
+	if failed != 0 {
+		t.Fatalf("failedSections = %d, want 0", failed)
+	}
+
+	// Rebuild the lookup key exactly as matchOne does, from the same raw title.
+	normalized := NormalizeTitle("Dune | Extended Edition")
+	if got, ok := byTitleYear[titleYearKey(normalized, "2021", Movie)]; !ok || got.RatingKey != "42" {
+		t.Errorf("byTitleYear lookup for a separator-bearing title = (%+v, %v), want rating key 42 present", got, ok)
+	}
+	if got, ok := byTitle[titleKey(normalized, Movie)]; !ok || got.RatingKey != "42" {
+		t.Errorf("byTitle lookup for a separator-bearing title = (%+v, %v), want rating key 42 present", got, ok)
 	}
 }

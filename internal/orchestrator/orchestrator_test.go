@@ -436,18 +436,35 @@ func TestBuildPlexIndex_AllThreeIndexes(t *testing.T) {
 	if _, ok := byGUID["tvdb://81189"]; !ok {
 		t.Error("expected tvdb GUID in byGUID")
 	}
-	if _, ok := byTitleYear["the matrix|1999|movie"]; !ok {
-		t.Error("expected 'the matrix|1999|movie' in byTitleYear")
+	// These assertions deliberately do not spell the index key: its encoding is
+	// remap's private business (remap.titleYearKey / remap.titleKey), and a literal
+	// here would re-freeze that encoding in a package that never builds a key.
+	// What this test cares about is that both a movie and a show got indexed
+	// into all three maps.
+	if !hasIndexedEntry(byTitleYear, "The Matrix", "1999", remap.Movie) {
+		t.Error("expected the movie (The Matrix, 1999) in byTitleYear")
 	}
-	if _, ok := byTitleYear["breaking bad|2008|show"]; !ok {
-		t.Error("expected 'breaking bad|2008|show' in byTitleYear")
+	if !hasIndexedEntry(byTitleYear, "Breaking Bad", "2008", remap.Show) {
+		t.Error("expected the show (Breaking Bad, 2008) in byTitleYear")
 	}
-	if _, ok := byTitle["the matrix|movie"]; !ok {
-		t.Error("expected 'the matrix|movie' in byTitle")
+	if !hasIndexedEntry(byTitle, "The Matrix", "1999", remap.Movie) {
+		t.Error("expected the movie (The Matrix) in byTitle")
 	}
-	if _, ok := byTitle["breaking bad|show"]; !ok {
-		t.Error("expected 'breaking bad|show' in byTitle")
+	if !hasIndexedEntry(byTitle, "Breaking Bad", "2008", remap.Show) {
+		t.Error("expected the show (Breaking Bad) in byTitle")
 	}
+}
+
+// hasIndexedEntry reports whether an index map holds an entry for the given
+// title, year and media type, without depending on how remap encodes its
+// composite keys.
+func hasIndexedEntry(index map[string]remap.PlexEntry, title, year string, mediaType remap.MediaType) bool {
+	for _, e := range index {
+		if e.Title.Raw() == title && e.Year == year && e.Type == mediaType {
+			return true
+		}
+	}
+	return false
 }
 
 func TestBuildPlexIndex_SkipsNonMovieShowSections(t *testing.T) {

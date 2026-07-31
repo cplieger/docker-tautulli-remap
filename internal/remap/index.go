@@ -10,6 +10,7 @@ import (
 	"sync"
 	"sync/atomic"
 
+	"github.com/cplieger/keyenc"
 	"golang.org/x/sync/errgroup"
 )
 
@@ -34,15 +35,39 @@ func NormalizeTitle(title string) string {
 // same-type duplicates collide and trigger refuse-to-match. Both add and
 // matchOne build the key through this helper, so the "index key == lookup key"
 // invariant holds by construction.
+//
+// The components are escaped with keyenc rather than concatenated because the
+// first one is free-form: normalizedTitle is a Plex media title, lower-cased
+// and trimmed but otherwise arbitrary operator- and metadata-agent-supplied
+// text, and real titles do contain the separator ("Dune | Extended Edition").
+// A collision here is not a cache miss, it is a merged identity, and this index
+// decides which rating key gets written into Tautulli's history database:
+// either two different Plex items land in one slot and the ambiguity guard
+// prunes it, silently refusing a legitimate remap, or a history item's lookup
+// resolves to the entry of a DIFFERENT item and live mode writes that wrong
+// rating key into the database, re-attaching watch history to the wrong title.
+//
+// No such collision is reachable today, because the two trailing components
+// have constrained alphabets: year is strconv.Itoa of an int and mediaType is
+// one of ParseMediaType's enum values (or empty). That safety is a property of
+// the current field list rather than of the key — appending a free-form
+// component (an edition tag, a section name) or widening year to a range would
+// open it silently, at a site whose failure mode is a wrong database write.
+// keyenc makes it a property of the key.
+//
+// The separator changed from '|' to keyenc's ':' with the adoption. Free here:
+// the three indexes are rebuilt in memory by every BuildPlexIndex call and
+// never persisted, logged as keys, or compared across runs.
 func titleYearKey(normalizedTitle, year string, mediaType MediaType) string {
-	return normalizedTitle + "|" + year + "|" + string(mediaType)
+	return keyenc.Join(normalizedTitle, year, string(mediaType))
 }
 
 // titleKey builds the composite lookup key for the byTitle index from a
 // pre-normalized title and the media type. See titleYearKey for why the media
-// type is part of the key.
+// type is part of the key, and why the components are escaped rather than
+// concatenated.
 func titleKey(normalizedTitle string, mediaType MediaType) string {
-	return normalizedTitle + "|" + string(mediaType)
+	return keyenc.Join(normalizedTitle, string(mediaType))
 }
 
 // plexIndex accumulates the three lookup maps (by GUID, by title+year, and by
