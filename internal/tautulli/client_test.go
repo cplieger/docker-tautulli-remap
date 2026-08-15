@@ -34,7 +34,7 @@ func TestAPI_Success(t *testing.T) {
 	defer srv.Close()
 
 	c := newTestClient(srv.URL, "testkey", srv.Client())
-	body, err := c.API(context.Background(), "get_history", nil)
+	body, err := c.API(t.Context(), "get_history", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -50,7 +50,7 @@ func TestAPI_Non200ReturnsError(t *testing.T) {
 	defer srv.Close()
 
 	c := newTestClient(srv.URL, "testkey", srv.Client())
-	_, err := c.API(context.Background(), "get_history", nil)
+	_, err := c.API(t.Context(), "get_history", nil)
 	if err == nil {
 		t.Fatal("expected error for 500 response")
 	}
@@ -70,7 +70,7 @@ func TestAPI_ExtraParams(t *testing.T) {
 
 	c := newTestClient(srv.URL, "k", srv.Client())
 	extra := url.Values{"start": {"100"}}
-	_, err := c.API(context.Background(), "test", extra)
+	_, err := c.API(t.Context(), "test", extra)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -98,7 +98,7 @@ func TestAPI_NonRetryable4xx(t *testing.T) {
 	defer srv.Close()
 
 	c := newTestClient(srv.URL, "testkey", srv.Client())
-	_, err := c.APIWithRetry(context.Background(), "backup_db", nil)
+	_, err := c.APIWithRetry(t.Context(), "backup_db", nil)
 	if err == nil {
 		t.Fatal("expected error for 403")
 	}
@@ -106,7 +106,7 @@ func TestAPI_NonRetryable4xx(t *testing.T) {
 
 func TestAPI_InvalidURL(t *testing.T) {
 	c := newTestClient("://invalid-url", "key", &http.Client{})
-	_, err := c.API(context.Background(), "test", nil)
+	_, err := c.API(t.Context(), "test", nil)
 	if err == nil {
 		t.Error("expected error for invalid URL")
 	}
@@ -125,7 +125,7 @@ func TestAPI_ExtraCannotOverrideBaseParams(t *testing.T) {
 	// A caller-supplied extra must not clobber the command or the API
 	// credential: requestURL applies cmd/apikey after merging extra.
 	extra := url.Values{"cmd": {"override_cmd"}, "apikey": {"override-key"}}
-	_, err := c.API(context.Background(), "base_cmd", extra)
+	_, err := c.API(t.Context(), "base_cmd", extra)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -149,7 +149,7 @@ func TestAPI_ErrorDoesNotLeakAPIKey(t *testing.T) {
 	defer srv.Close()
 
 	c := newTestClient(srv.URL, "supersecretkey123", srv.Client())
-	_, err := c.API(context.Background(), "test", nil)
+	_, err := c.API(t.Context(), "test", nil)
 	if err == nil {
 		t.Fatal("expected error")
 	}
@@ -167,7 +167,7 @@ func TestAPIWithRetry_SucceedsOnFirst(t *testing.T) {
 	defer srv.Close()
 
 	c := newTestClient(srv.URL, "k", srv.Client())
-	body, err := c.APIWithRetry(context.Background(), "test", nil)
+	body, err := c.APIWithRetry(t.Context(), "test", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -192,7 +192,7 @@ func TestAPIWithRetry_RetriesOnServerError(t *testing.T) {
 	defer srv.Close()
 
 	c := newTestClient(srv.URL, "k", srv.Client())
-	body, err := c.APIWithRetry(context.Background(), "test", nil)
+	body, err := c.APIWithRetry(t.Context(), "test", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -213,7 +213,7 @@ func TestAPIWithRetry_Exact3Attempts(t *testing.T) {
 	defer srv.Close()
 
 	c := newTestClient(srv.URL, "k", srv.Client())
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
 	defer cancel()
 	_, err := c.APIWithRetry(ctx, "test_cmd", nil)
 	if err == nil {
@@ -237,7 +237,7 @@ func TestAPIWithRetry_SuccessOnSecondAttempt(t *testing.T) {
 	defer srv.Close()
 
 	c := newTestClient(srv.URL, "k", srv.Client())
-	body, err := c.APIWithRetry(context.Background(), "test_cmd", nil)
+	body, err := c.APIWithRetry(t.Context(), "test_cmd", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -274,7 +274,7 @@ func TestGetHistory_Success(t *testing.T) {
 	defer srv.Close()
 
 	c := newTestClient(srv.URL, "k", srv.Client())
-	page, err := c.GetHistory(context.Background(), nil)
+	page, err := c.GetHistory(t.Context(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -293,7 +293,7 @@ func TestGetHistory_APIError(t *testing.T) {
 	defer srv.Close()
 
 	c := newTestClient(srv.URL, "k", srv.Client())
-	_, err := c.GetHistory(context.Background(), nil)
+	_, err := c.GetHistory(t.Context(), nil)
 	if err == nil {
 		t.Fatal("expected error for non-success result")
 	}
@@ -335,7 +335,7 @@ func TestAPIWithRetry_ErrorDoesNotLeakAPIKey(t *testing.T) {
 	defer srv.Close()
 
 	c := newTestClient(srv.URL, "supersecretkey123", srv.Client())
-	_, err := c.APIWithRetry(context.Background(), "test", nil)
+	_, err := c.APIWithRetry(t.Context(), "test", nil)
 	if err == nil {
 		t.Fatal("expected error from exhausted retries")
 	}
@@ -359,7 +359,7 @@ func TestAPIWithRetry_DoesNotLogAPIKey(t *testing.T) {
 	t.Cleanup(func() { slog.SetDefault(prev) })
 
 	c := newTestClient(srv.URL, "supersecretkey123", srv.Client())
-	_, _ = c.APIWithRetry(context.Background(), "test", nil)
+	_, _ = c.APIWithRetry(t.Context(), "test", nil)
 
 	logged := buf.String()
 	if strings.Contains(logged, "supersecretkey123") {
@@ -382,7 +382,7 @@ func TestUpdateMetadata_SendsParamsAndSucceeds(t *testing.T) {
 	defer srv.Close()
 
 	c := newTestClient(srv.URL, "k", srv.Client())
-	if err := c.UpdateMetadata(context.Background(), "100", "200", remap.Movie); err != nil {
+	if err := c.UpdateMetadata(t.Context(), "100", "200", remap.Movie); err != nil {
 		t.Fatal(err)
 	}
 	if gotCmd != "update_metadata_details" {
@@ -400,7 +400,7 @@ func TestUpdateMetadata_NonSuccessReturnsError(t *testing.T) {
 	defer srv.Close()
 
 	c := newTestClient(srv.URL, "k", srv.Client())
-	err := c.UpdateMetadata(context.Background(), "100", "200", remap.Movie)
+	err := c.UpdateMetadata(t.Context(), "100", "200", remap.Movie)
 	if err == nil {
 		t.Fatal("expected error for non-success result")
 	}
@@ -418,7 +418,7 @@ func TestDeleteRecentlyAdded_SendsCmdAndSucceeds(t *testing.T) {
 	defer srv.Close()
 
 	c := newTestClient(srv.URL, "k", srv.Client())
-	if err := c.DeleteRecentlyAdded(context.Background()); err != nil {
+	if err := c.DeleteRecentlyAdded(t.Context()); err != nil {
 		t.Fatal(err)
 	}
 	if gotCmd != "delete_recently_added" {
@@ -433,7 +433,7 @@ func TestDeleteRecentlyAdded_NonSuccessReturnsError(t *testing.T) {
 	defer srv.Close()
 
 	c := newTestClient(srv.URL, "k", srv.Client())
-	if err := c.DeleteRecentlyAdded(context.Background()); err == nil {
+	if err := c.DeleteRecentlyAdded(t.Context()); err == nil {
 		t.Fatal("expected error for non-success result")
 	}
 }
@@ -445,7 +445,7 @@ func TestGetHistory_MalformedBodyReturnsParseError(t *testing.T) {
 	defer srv.Close()
 
 	c := newTestClient(srv.URL, "k", srv.Client())
-	_, err := c.GetHistory(context.Background(), nil)
+	_, err := c.GetHistory(t.Context(), nil)
 	if err == nil {
 		t.Fatal("expected a parse error for a malformed 200 body")
 	}
@@ -461,7 +461,7 @@ func TestUpdateMetadata_MalformedBodyReturnsParseError(t *testing.T) {
 	defer srv.Close()
 
 	c := newTestClient(srv.URL, "k", srv.Client())
-	err := c.UpdateMetadata(context.Background(), "100", "200", remap.Movie)
+	err := c.UpdateMetadata(t.Context(), "100", "200", remap.Movie)
 	if err == nil {
 		t.Fatal("expected a parse error for a malformed body")
 	}
@@ -481,7 +481,7 @@ func TestUpdateMetadata_APIErrorPropagates(t *testing.T) {
 	defer srv.Close()
 
 	c := newTestClient(srv.URL, "k", srv.Client())
-	err := c.UpdateMetadata(context.Background(), "100", "200", remap.Movie)
+	err := c.UpdateMetadata(t.Context(), "100", "200", remap.Movie)
 	if err == nil {
 		t.Fatal("expected UpdateMetadata to surface the transport error from a failed live write")
 	}
@@ -500,7 +500,7 @@ func TestGetHistory_APIWithRetryErrorPropagates(t *testing.T) {
 	defer srv.Close()
 
 	c := newTestClient(srv.URL, "k", srv.Client())
-	_, err := c.GetHistory(context.Background(), nil)
+	_, err := c.GetHistory(t.Context(), nil)
 	if err == nil {
 		t.Fatal("expected GetHistory to surface the retry-exhausted error")
 	}
@@ -518,7 +518,7 @@ func TestDeleteRecentlyAdded_APIErrorPropagates(t *testing.T) {
 	defer srv.Close()
 
 	c := newTestClient(srv.URL, "k", srv.Client())
-	err := c.DeleteRecentlyAdded(context.Background())
+	err := c.DeleteRecentlyAdded(t.Context())
 	if err == nil {
 		t.Fatal("expected DeleteRecentlyAdded to surface the transport error")
 	}
@@ -549,7 +549,7 @@ func TestGetHistory_UnknownMediaTypeRowSkipped(t *testing.T) {
 	defer srv.Close()
 
 	c := newTestClient(srv.URL, "k", srv.Client())
-	page, err := c.GetHistory(context.Background(), nil)
+	page, err := c.GetHistory(t.Context(), nil)
 	if err != nil {
 		t.Fatalf("GetHistory errored on a page containing an unknown media_type: %v", err)
 	}

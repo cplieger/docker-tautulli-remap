@@ -27,6 +27,8 @@ func TestFinishTrigger(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			// Background, not t.Context(): the cancel cases below pre-cancel
+			// this ctx on purpose to drive the exitInterrupted path.
 			ctx, cancel := context.WithCancel(context.Background())
 			defer cancel()
 			if tt.cancel {

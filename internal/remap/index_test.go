@@ -43,7 +43,7 @@ func TestBuildPlexIndex_TitleYearCollisionRefusesToMatch(t *testing.T) {
 	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug})))
 	t.Cleanup(func() { slog.SetDefault(prev) })
 
-	byGUID, byTitleYear, byTitle, failed := BuildPlexIndex(context.Background(), fetcher, 1)
+	byGUID, byTitleYear, byTitle, failed := BuildPlexIndex(t.Context(), fetcher, 1)
 	if failed != 0 {
 		t.Errorf("failedSections = %d, want 0 (fetcher never errors)", failed)
 	}
@@ -89,7 +89,7 @@ func TestBuildPlexIndex_SameKeyReindexedNoShadow(t *testing.T) {
 	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug})))
 	t.Cleanup(func() { slog.SetDefault(prev) })
 
-	_, byTitleYear, _, _ := BuildPlexIndex(context.Background(), fetcher, 1)
+	_, byTitleYear, _, _ := BuildPlexIndex(t.Context(), fetcher, 1)
 
 	if got := byTitleYear[titleYearKey("dune", "2021", Movie)].RatingKey; got != "7" {
 		t.Errorf("byTitleYear[(dune, 2021, movie)].RatingKey = %q, want %q", got, "7")
@@ -142,7 +142,7 @@ func TestBuildPlexIndex_ReportsFailedSections(t *testing.T) {
 		failSection: "2",
 	}
 
-	_, byTitleYear, _, failed := BuildPlexIndex(context.Background(), fetcher, 1)
+	_, byTitleYear, _, failed := BuildPlexIndex(t.Context(), fetcher, 1)
 
 	if failed != 1 {
 		t.Errorf("failedSections = %d, want 1 (one section errored)", failed)
@@ -153,7 +153,7 @@ func TestBuildPlexIndex_ReportsFailedSections(t *testing.T) {
 }
 
 func TestBuildPlexIndex_SectionListError(t *testing.T) {
-	byGUID, byTitleYear, byTitle, failed := BuildPlexIndex(context.Background(), listErrorFetcher{}, 1)
+	byGUID, byTitleYear, byTitle, failed := BuildPlexIndex(t.Context(), listErrorFetcher{}, 1)
 
 	if failed == 0 {
 		t.Error("expected non-zero failedSections when the section list fetch fails")
@@ -179,7 +179,7 @@ func TestBuildPlexIndex_GUIDCollisionRefusesToMatch(t *testing.T) {
 	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug})))
 	t.Cleanup(func() { slog.SetDefault(prev) })
 
-	byGUID, _, _, failed := BuildPlexIndex(context.Background(), fetcher, 1)
+	byGUID, _, _, failed := BuildPlexIndex(t.Context(), fetcher, 1)
 	if failed != 0 {
 		t.Errorf("failedSections = %d, want 0 (fetcher never errors)", failed)
 	}
@@ -205,7 +205,7 @@ func TestBuildPlexIndex_ParallelismBelowOneStillIndexes(t *testing.T) {
 		},
 	}
 
-	byGUID, byTitleYear, _, failed := BuildPlexIndex(context.Background(), fetcher, 0)
+	byGUID, byTitleYear, _, failed := BuildPlexIndex(t.Context(), fetcher, 0)
 	if failed != 0 {
 		t.Errorf("failedSections = %d, want 0", failed)
 	}
@@ -253,7 +253,7 @@ func TestBuildPlexIndex_CancelledBeforeScanIsNotAFailure(t *testing.T) {
 }
 
 func TestBuildPlexIndex_CancelledMidFetchIsNotAFailure(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	fetcher := &cancelOnFetchFetcher{
 		sections: []Section{{Key: "1", Title: "Movies", Type: "movie"}},
 		cancel:   cancel,
@@ -275,7 +275,7 @@ func TestBuildPlexIndex_SkipsNonMovieShowSections(t *testing.T) {
 			"2": {{RatingKey: 9, Title: "Some Album", Year: 2001, GUIDs: []string{"mbid://abc"}}},
 		},
 	}
-	byGUID, byTitleYear, byTitle, failed := BuildPlexIndex(context.Background(), fetcher, 1)
+	byGUID, byTitleYear, byTitle, failed := BuildPlexIndex(t.Context(), fetcher, 1)
 	if failed != 0 {
 		t.Errorf("failedSections = %d, want 0", failed)
 	}
@@ -312,7 +312,7 @@ func TestBuildPlexIndex_TitleOnlyCollisionKeepsTitleYearMatchable(t *testing.T) 
 		},
 	}
 
-	byGUID, byTitleYear, byTitle, failed := BuildPlexIndex(context.Background(), fetcher, 1)
+	byGUID, byTitleYear, byTitle, failed := BuildPlexIndex(t.Context(), fetcher, 1)
 	if failed != 0 {
 		t.Errorf("failedSections = %d, want 0 (fetcher never errors)", failed)
 	}
@@ -351,7 +351,7 @@ func TestMatch_CrossTypeSameTitleYear_RecoversMovieMatch(t *testing.T) {
 		},
 	}
 
-	byGUID, byTitleYear, byTitle, failed := BuildPlexIndex(context.Background(), fetcher, 1)
+	byGUID, byTitleYear, byTitle, failed := BuildPlexIndex(t.Context(), fetcher, 1)
 	if failed != 0 {
 		t.Fatalf("failedSections = %d, want 0 (fetcher never errors)", failed)
 	}
@@ -395,7 +395,7 @@ func TestMatch_SameTypeTitleYearTwin_StillRefusesToMatch(t *testing.T) {
 		},
 	}
 
-	byGUID, byTitleYear, byTitle, failed := BuildPlexIndex(context.Background(), fetcher, 1)
+	byGUID, byTitleYear, byTitle, failed := BuildPlexIndex(t.Context(), fetcher, 1)
 	if failed != 0 {
 		t.Fatalf("failedSections = %d, want 0 (fetcher never errors)", failed)
 	}
@@ -431,7 +431,7 @@ func TestBuildPlexIndex_CrossSectionGUIDCollisionRefusesToMatch(t *testing.T) {
 			"2": {{RatingKey: 2, Title: "Heat 4K", Year: 1995, GUIDs: []string{"imdb://tt0113277"}}},
 		},
 	}
-	byGUID, _, _, failed := BuildPlexIndex(context.Background(), fetcher, 2)
+	byGUID, _, _, failed := BuildPlexIndex(t.Context(), fetcher, 2)
 	if failed != 0 {
 		t.Errorf("failedSections = %d, want 0 (fetcher never errors)", failed)
 	}
@@ -462,7 +462,7 @@ func TestBuildPlexIndex_AnnouncesRefusalSummaryWhenKeysAreAmbiguous(t *testing.T
 	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug})))
 	t.Cleanup(func() { slog.SetDefault(prev) })
 
-	BuildPlexIndex(context.Background(), fetcher, 1)
+	BuildPlexIndex(t.Context(), fetcher, 1)
 
 	if !strings.Contains(buf.String(), "refused to match ambiguous index keys") {
 		t.Errorf("expected the ambiguity-refusal summary to be logged when keys are pruned, got:\n%s", buf.String())
@@ -488,7 +488,7 @@ func TestBuildPlexIndex_OmitsRefusalSummaryWhenNoKeysAreAmbiguous(t *testing.T) 
 	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug})))
 	t.Cleanup(func() { slog.SetDefault(prev) })
 
-	BuildPlexIndex(context.Background(), fetcher, 1)
+	BuildPlexIndex(t.Context(), fetcher, 1)
 
 	if strings.Contains(buf.String(), "refused to match ambiguous index keys") {
 		t.Errorf("did not expect the ambiguity-refusal summary for a collision-free index, got:\n%s", buf.String())
@@ -715,7 +715,7 @@ func TestIndexKeysBuilderAndLookupAgree(t *testing.T) {
 			"1": {{RatingKey: 42, Title: "Dune | Extended Edition", Year: 2021}},
 		},
 	}
-	_, byTitleYear, byTitle, failed := BuildPlexIndex(context.Background(), fetcher, 1)
+	_, byTitleYear, byTitle, failed := BuildPlexIndex(t.Context(), fetcher, 1)
 	if failed != 0 {
 		t.Fatalf("failedSections = %d, want 0", failed)
 	}
