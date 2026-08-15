@@ -67,7 +67,7 @@ func TestRun_DryRun_NoStale(t *testing.T) {
 	o := New(&fakePlex{}, ft, &config.Config{DryRun: true})
 	o.PaginationDelay = time.Millisecond
 	o.RunLockPath = filepath.Join(t.TempDir(), "remap.lock")
-	ok := o.Run(context.Background())
+	ok := o.Run(t.Context())
 	if !ok {
 		t.Error("expected success when all keys are valid")
 	}
@@ -113,7 +113,7 @@ func TestCollectTautulliItems_SinglePage(t *testing.T) {
 		}}}`))
 	})
 	orch := newOrch(t, cfg)
-	items, _ := orch.CollectTautulliItems(context.Background())
+	items, _ := orch.CollectTautulliItems(t.Context())
 	if items == nil {
 		t.Fatal("expected non-nil items")
 	}
@@ -133,7 +133,7 @@ func TestCollectTautulliItems_CapturesEpisodeGUID(t *testing.T) {
 		w.Write([]byte(`{"response":{"result":"success","data":{"recordsFiltered":1,"data":[{"rating_key":99,"grandparent_rating_key":50,"title":"Ep 1","grandparent_title":"Show B","year":2021,"media_type":"episode","guid":"plex://episode/5d9c081be98e47001eb0d74f"}]}}}`))
 	})
 	orch := newOrch(t, cfg)
-	items, captured := orch.CollectTautulliItems(context.Background())
+	items, captured := orch.CollectTautulliItems(t.Context())
 	if items == nil {
 		t.Fatal("expected non-nil items")
 	}
@@ -164,7 +164,7 @@ func TestCollectTautulliItems_MultiPage(t *testing.T) {
 		}
 	})
 	orch := newOrch(t, cfg)
-	items, _ := orch.CollectTautulliItems(context.Background())
+	items, _ := orch.CollectTautulliItems(t.Context())
 	if items == nil {
 		t.Fatal("expected non-nil items")
 	}
@@ -181,7 +181,7 @@ func TestCollectTautulliItems_APIError(t *testing.T) {
 		w.Write([]byte(`{"response":{"result":"error","message":"bad request"}}`))
 	})
 	orch := newOrch(t, cfg)
-	items, _ := orch.CollectTautulliItems(context.Background())
+	items, _ := orch.CollectTautulliItems(t.Context())
 	if items != nil {
 		t.Errorf("expected nil on API error, got %v", items)
 	}
@@ -192,7 +192,7 @@ func TestCollectTautulliItems_InvalidJSON(t *testing.T) {
 		w.Write([]byte(`not json`))
 	})
 	orch := newOrch(t, cfg)
-	items, _ := orch.CollectTautulliItems(context.Background())
+	items, _ := orch.CollectTautulliItems(t.Context())
 	if items != nil {
 		t.Errorf("expected nil on invalid JSON, got %v", items)
 	}
@@ -203,7 +203,7 @@ func TestCollectTautulliItems_EmptyData(t *testing.T) {
 		w.Write([]byte(`{"response":{"result":"success","data":{"recordsFiltered":0,"data":[]}}}`))
 	})
 	orch := newOrch(t, cfg)
-	items, _ := orch.CollectTautulliItems(context.Background())
+	items, _ := orch.CollectTautulliItems(t.Context())
 	if items == nil {
 		t.Fatal("expected non-nil map")
 	}
@@ -217,7 +217,7 @@ func TestCollectTautulliItems_HTTPFailure(t *testing.T) {
 		w.WriteHeader(http.StatusInternalServerError)
 	})
 	orch := newOrch(t, cfg)
-	items, _ := orch.CollectTautulliItems(context.Background())
+	items, _ := orch.CollectTautulliItems(t.Context())
 	if items != nil {
 		t.Errorf("expected nil on HTTP failure, got %v", items)
 	}
@@ -231,7 +231,7 @@ func TestCollectTautulliItems_ExceedsMaxRecords(t *testing.T) {
 		}}}`))
 	})
 	orch := newOrch(t, cfg)
-	items, _ := orch.CollectTautulliItems(context.Background())
+	items, _ := orch.CollectTautulliItems(t.Context())
 	if items != nil {
 		t.Errorf("expected nil when records exceed cap, got %d items", len(items))
 	}
@@ -252,7 +252,7 @@ func TestCollectTautulliItems_ExactPageBoundary(t *testing.T) {
 		}
 	})
 	orch := newOrch(t, cfg)
-	items, _ := orch.CollectTautulliItems(context.Background())
+	items, _ := orch.CollectTautulliItems(t.Context())
 	if items == nil {
 		t.Fatal("expected non-nil items")
 	}
@@ -282,7 +282,7 @@ func TestCollectTautulliItems_PaginationIncrement(t *testing.T) {
 		}
 	})
 	orch := newOrch(t, cfg)
-	items, _ := orch.CollectTautulliItems(context.Background())
+	items, _ := orch.CollectTautulliItems(t.Context())
 	if items == nil {
 		t.Fatal("expected non-nil items")
 	}
@@ -298,7 +298,7 @@ func TestCollectTautulliItems_PaginationIncrement(t *testing.T) {
 }
 
 func TestCollectTautulliItems_CancelDuringPagination(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	calls := 0
 	cfg := testServer(t, func(w http.ResponseWriter, _ *http.Request) {
 		calls++
@@ -334,7 +334,7 @@ func TestFindStaleKeys_IdentifiesStaleAndValid(t *testing.T) {
 		"42":  {RatingKey: "42", Title: "Valid", MediaType: remap.Movie},
 		"999": {RatingKey: "999", Title: "Stale", MediaType: remap.Movie},
 	}
-	stale, err := orch.FindStaleKeys(context.Background(), items)
+	stale, err := orch.FindStaleKeys(t.Context(), items)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -354,7 +354,7 @@ func TestFindStaleKeys_AllValid(t *testing.T) {
 	items := map[string]remap.TautulliEntry{
 		"1": {RatingKey: "1", Title: "A", MediaType: remap.Movie},
 	}
-	stale, err := orch.FindStaleKeys(context.Background(), items)
+	stale, err := orch.FindStaleKeys(t.Context(), items)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -386,7 +386,7 @@ func TestFindStaleKeys_ProgressLogBoundary(t *testing.T) {
 		k := strconv.Itoa(i)
 		items[k] = remap.TautulliEntry{RatingKey: k, Title: "M", MediaType: remap.Movie}
 	}
-	stale, err := orch.FindStaleKeys(context.Background(), items)
+	stale, err := orch.FindStaleKeys(t.Context(), items)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -422,7 +422,7 @@ func TestBuildPlexIndex_AllThreeIndexes(t *testing.T) {
 	if perr != nil {
 		t.Fatalf("plex.New: %v", perr)
 	}
-	byGUID, byTitleYear, byTitle, failed := remap.BuildPlexIndex(context.Background(), pc, 8)
+	byGUID, byTitleYear, byTitle, failed := remap.BuildPlexIndex(t.Context(), pc, 8)
 	if failed != 0 {
 		t.Errorf("failedSections = %d, want 0 (all scanned sections returned 200)", failed)
 	}
@@ -482,7 +482,7 @@ func TestBuildPlexIndex_SkipsNonMovieShowSections(t *testing.T) {
 	if perr != nil {
 		t.Fatalf("plex.New: %v", perr)
 	}
-	byGUID, byTitleYear, byTitle, failed := remap.BuildPlexIndex(context.Background(), pc, 8)
+	byGUID, byTitleYear, byTitle, failed := remap.BuildPlexIndex(t.Context(), pc, 8)
 	if failed != 0 {
 		t.Errorf("failedSections = %d, want 0 (non-movie/show sections are skipped, not failed)", failed)
 	}
@@ -492,7 +492,7 @@ func TestBuildPlexIndex_SkipsNonMovieShowSections(t *testing.T) {
 }
 
 func TestBuildPlexIndex_CancelBetweenSections(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	var sectionAllHits atomic.Int32
 	cfg := testServer(t, func(w http.ResponseWriter, r *http.Request) {
 		switch {
@@ -531,7 +531,7 @@ func TestApplyRemappings_DryRun(t *testing.T) {
 	matched := []remap.MatchResult{
 		{Title: "Movie A", Year: "2020", OldKey: "100", NewKey: "200", MediaType: remap.Movie, Method: remap.MethodGUID},
 	}
-	orch.ApplyRemappings(context.Background(), matched, nil)
+	orch.ApplyRemappings(t.Context(), matched, nil)
 	if calls != 0 {
 		t.Errorf("expected 0 API calls in dry run, got %d", calls)
 	}
@@ -547,7 +547,7 @@ func TestApplyRemappings_DryRunPreviewLoggedAtInfo(t *testing.T) {
 	matched := []remap.MatchResult{
 		{Title: "Movie A", Year: "2020", OldKey: "100", NewKey: "200", MediaType: remap.Movie, Method: remap.MethodGUID},
 	}
-	o.ApplyRemappings(context.Background(), matched, nil)
+	o.ApplyRemappings(t.Context(), matched, nil)
 
 	out := buf.String()
 	if !strings.Contains(out, "msg=remap") {
@@ -575,7 +575,7 @@ func TestApplyRemappings_LiveRemap(t *testing.T) {
 	matched := []remap.MatchResult{
 		{Title: "Movie A", Year: "2020", OldKey: "100", NewKey: "200", MediaType: remap.Movie, Method: remap.MethodGUID},
 	}
-	orch.ApplyRemappings(context.Background(), matched, nil)
+	orch.ApplyRemappings(t.Context(), matched, nil)
 	if calls != 1 {
 		t.Errorf("expected 1 API call, got %d", calls)
 	}
@@ -590,7 +590,7 @@ func TestApplyRemappings_APIError(t *testing.T) {
 	matched := []remap.MatchResult{
 		{Title: "Movie A", Year: "2020", OldKey: "100", NewKey: "200", MediaType: remap.Movie, Method: remap.MethodGUID},
 	}
-	updated, failed, aborted := orch.ApplyRemappings(context.Background(), matched, nil)
+	updated, failed, aborted := orch.ApplyRemappings(t.Context(), matched, nil)
 	if updated != 0 {
 		t.Errorf("updated = %d, want 0 (the only remap failed)", updated)
 	}
@@ -607,7 +607,7 @@ func TestApplyRemappings_EmptyMatched(t *testing.T) {
 		t.Error("should not call API with empty matched")
 	})
 	orch := newOrch(t, cfg)
-	orch.ApplyRemappings(context.Background(), nil, nil)
+	orch.ApplyRemappings(t.Context(), nil, nil)
 }
 
 func TestApplyRemappings_CancelledContext(t *testing.T) {
@@ -646,7 +646,7 @@ func TestApplyRemappings_AbortsAfterConsecutiveFailures(t *testing.T) {
 			MediaType: remap.Movie, Method: remap.MethodGUID,
 		}
 	}
-	updated, failed, aborted := orch.ApplyRemappings(context.Background(), matched, nil)
+	updated, failed, aborted := orch.ApplyRemappings(t.Context(), matched, nil)
 	if updated != 0 {
 		t.Errorf("updated = %d, want 0", updated)
 	}
@@ -668,7 +668,7 @@ func TestClearRecentlyAdded_DryRun(t *testing.T) {
 	})
 	cfg.DryRun = true
 	orch := newOrch(t, cfg)
-	if !orch.ClearRecentlyAdded(context.Background()) {
+	if !orch.ClearRecentlyAdded(t.Context()) {
 		t.Error("ClearRecentlyAdded() = false in dry run, want true (nothing to fail)")
 	}
 	if calls != 0 {
@@ -687,7 +687,7 @@ func TestClearRecentlyAdded_Live(t *testing.T) {
 	})
 	cfg.DryRun = false
 	orch := newOrch(t, cfg)
-	if !orch.ClearRecentlyAdded(context.Background()) {
+	if !orch.ClearRecentlyAdded(t.Context()) {
 		t.Error("ClearRecentlyAdded() = false, want true on a successful clear")
 	}
 	if calls != 1 {
@@ -701,7 +701,7 @@ func TestClearRecentlyAdded_HTTPError(t *testing.T) {
 	})
 	cfg.DryRun = false
 	orch := newOrch(t, cfg)
-	if orch.ClearRecentlyAdded(context.Background()) {
+	if orch.ClearRecentlyAdded(t.Context()) {
 		t.Error("ClearRecentlyAdded() = true, want false when the API call fails (incomplete cleanup must be reported)")
 	}
 }
@@ -722,7 +722,7 @@ func TestRun_AllKeysValid(t *testing.T) {
 	})
 	cfg.DryRun = true
 	orch := newOrch(t, cfg)
-	if !orch.Run(context.Background()) {
+	if !orch.Run(t.Context()) {
 		t.Error("expected true when all keys are valid")
 	}
 }
@@ -757,7 +757,7 @@ func TestRun_StaleKeysTriggerRemap(t *testing.T) {
 	})
 	cfg.DryRun = false
 	orch := newOrch(t, cfg)
-	if !orch.Run(context.Background()) {
+	if !orch.Run(t.Context()) {
 		t.Error("expected true on successful remap")
 	}
 	if !remapCalled {
@@ -771,7 +771,7 @@ func TestRun_HistoryFailure(t *testing.T) {
 	})
 	cfg.DryRun = true
 	orch := newOrch(t, cfg)
-	if orch.Run(context.Background()) {
+	if orch.Run(t.Context()) {
 		t.Error("expected false when history collection fails")
 	}
 }
@@ -791,7 +791,7 @@ func TestRun_DryRunSkipsBackup(t *testing.T) {
 	})
 	cfg.DryRun = true
 	orch := newOrch(t, cfg)
-	orch.Run(context.Background())
+	orch.Run(t.Context())
 	if backupCalled {
 		t.Error("backup_db should not be called in dry run")
 	}
@@ -833,7 +833,7 @@ func TestRun_NonDryRunCallsBackup(t *testing.T) {
 	})
 	cfg.DryRun = false
 	orch := newOrch(t, cfg)
-	if !orch.Run(context.Background()) {
+	if !orch.Run(t.Context()) {
 		t.Fatal("Run() = false, want true")
 	}
 	backupAt, updateAt := -1, -1
@@ -875,7 +875,7 @@ func TestRun_LiveNoWorkSkipsBackup(t *testing.T) {
 	})
 	cfg.DryRun = false
 	orch := newOrch(t, cfg)
-	if !orch.Run(context.Background()) {
+	if !orch.Run(t.Context()) {
 		t.Fatal("Run() = false, want true when nothing is stale")
 	}
 	if backupCalled {
@@ -914,7 +914,7 @@ func TestRun_LiveStaleUnmatchedSkipsBackup(t *testing.T) {
 	})
 	cfg.DryRun = false
 	orch := newOrch(t, cfg)
-	if !orch.Run(context.Background()) {
+	if !orch.Run(t.Context()) {
 		t.Fatal("Run() = false, want true (an unmatched stale item is not a failure)")
 	}
 	if backupCalled {
@@ -941,7 +941,7 @@ func TestRun_EmptyPlexIndex(t *testing.T) {
 	})
 	cfg.DryRun = true
 	orch := newOrch(t, cfg)
-	if orch.Run(context.Background()) {
+	if orch.Run(t.Context()) {
 		t.Error("expected false when Plex library index is empty")
 	}
 }
@@ -977,7 +977,7 @@ func TestRun_BackupFailureAborts(t *testing.T) {
 	})
 	cfg.DryRun = false
 	orch := newOrch(t, cfg)
-	if orch.Run(context.Background()) {
+	if orch.Run(t.Context()) {
 		t.Error("Run() = true, want false when backup_db fails in live mode (no recovery point, must abort)")
 	}
 	mu.Lock()
@@ -1024,7 +1024,7 @@ func TestRun_ClearFailureFailsRun(t *testing.T) {
 	})
 	cfg.DryRun = false
 	orch := newOrch(t, cfg)
-	if orch.Run(context.Background()) {
+	if orch.Run(t.Context()) {
 		t.Error("Run() = true, want false when the recently-added clear fails (documented cleanup incomplete)")
 	}
 }
@@ -1052,10 +1052,10 @@ func TestRun_RefusesOverlappingRun(t *testing.T) {
 	orch := newOrch(t, cfg)
 
 	firstDone := make(chan bool)
-	go func() { firstDone <- orch.Run(context.Background()) }()
+	go func() { firstDone <- orch.Run(t.Context()) }()
 	<-firstEntered // the first pass now holds the lock, blocked mid-collection
 
-	if orch.Run(context.Background()) {
+	if orch.Run(t.Context()) {
 		t.Error("overlapping Run() = true, want false while another pass holds the lock")
 	}
 	if got := histCalls.Load(); got != 1 {
@@ -1068,7 +1068,7 @@ func TestRun_RefusesOverlappingRun(t *testing.T) {
 	}
 
 	// Lock released with the holder gone: the next pass proceeds normally.
-	if !orch.Run(context.Background()) {
+	if !orch.Run(t.Context()) {
 		t.Error("post-release Run() = false, want true (lock must be released after a pass)")
 	}
 	if got := histCalls.Load(); got != 2 {
@@ -1102,7 +1102,7 @@ func TestRun_AllRemapsFail_ReturnsFalse(t *testing.T) {
 	})
 	cfg.DryRun = false
 	orch := newOrch(t, cfg)
-	if orch.Run(context.Background()) {
+	if orch.Run(t.Context()) {
 		t.Error("Run() = true, want false when the only stale item failed to remap (updated=0, failed=1)")
 	}
 }
@@ -1146,7 +1146,7 @@ func TestRun_AbortsOnPartialSectionFailure(t *testing.T) {
 	// Section 1 loads (index is non-empty, so the all-empty guard passes) but
 	// section 2 returns 500. The run must abort rather than remap against the
 	// partial index.
-	if orch.Run(context.Background()) {
+	if orch.Run(t.Context()) {
 		t.Error("Run() = true, want false when a Plex section fetch failed (partial index must not be trusted)")
 	}
 }
@@ -1163,7 +1163,7 @@ func TestFindStaleKeys_PlexErrorAborts(t *testing.T) {
 	items := map[string]remap.TautulliEntry{
 		"1": {RatingKey: "1", Title: "A", MediaType: remap.Movie},
 	}
-	stale, err := orch.FindStaleKeys(context.Background(), items)
+	stale, err := orch.FindStaleKeys(t.Context(), items)
 	if err == nil {
 		t.Error("expected non-nil error when Plex returns 500 during the stale-key check")
 	}
@@ -1199,7 +1199,7 @@ func TestRun_AbortsWhenPlexCheckErrors(t *testing.T) {
 	})
 	cfg.DryRun = true
 	orch := newOrch(t, cfg)
-	if orch.Run(context.Background()) {
+	if orch.Run(t.Context()) {
 		t.Error("Run() = true, want false when Plex returns errors during the stale-key check")
 	}
 }
@@ -1256,7 +1256,7 @@ func TestRun_BreakerTripAfterSuccessReturnsFalse(t *testing.T) {
 	})
 	cfg.DryRun = false
 	orch := newOrch(t, cfg)
-	if orch.Run(context.Background()) {
+	if orch.Run(t.Context()) {
 		t.Error("Run() = true, want false when the circuit breaker tripped (even though >=1 update succeeded before the trip)")
 	}
 	if got := updateCalls.Load(); got < 11 {
@@ -1276,7 +1276,7 @@ func TestRunScheduler_ShutdownInterruptedRunNotCountedAsFailure(t *testing.T) {
 	t.Cleanup(func() { slog.SetDefault(orig) })
 
 	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
+	cancel() // pre-cancelled on purpose; Background, not t.Context()
 
 	var falseCount int
 	setHealthy := func(healthy bool) {
@@ -1351,7 +1351,7 @@ func TestRun_PartialRemapFailureStillSucceeds(t *testing.T) {
 	})
 	cfg.DryRun = false
 	orch := newOrch(t, cfg)
-	if !orch.Run(context.Background()) {
+	if !orch.Run(t.Context()) {
 		t.Error("Run() = false, want true: a partial remap (one update landed, one failed, breaker not tripped) made progress and must not flap the health marker")
 	}
 }
@@ -1387,6 +1387,8 @@ func TestRunScheduler_FlipsUnhealthyAfterConsecutiveFailures(t *testing.T) {
 	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, nil)))
 	t.Cleanup(func() { slog.SetDefault(orig) })
 
+	// Background, not t.Context(): cancel is both the scheduler's stop signal
+	// and the Cleanup safety net, so its lifetime is tied to Cleanup.
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 	ft := &scriptedScheduler{failPlan: []bool{true, true, true}, cancel: cancel}
@@ -1422,6 +1424,8 @@ func TestRunScheduler_ResetsFailureCountOnSuccess(t *testing.T) {
 	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, nil)))
 	t.Cleanup(func() { slog.SetDefault(orig) })
 
+	// Background, not t.Context(): cancel is both the scheduler's stop signal
+	// and the Cleanup safety net, so its lifetime is tied to Cleanup.
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 	// fail, fail, succeed (resets the counter to 0), fail: the counter never
@@ -1449,7 +1453,7 @@ func TestRunScheduler_ResetsFailureCountOnSuccess(t *testing.T) {
 }
 
 func TestRun_ShutdownDuringRemapReturnsFalse(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	cfg := testServer(t, func(w http.ResponseWriter, r *http.Request) {
 		cmd := r.URL.Query().Get("cmd")
 		switch {
@@ -1494,7 +1498,7 @@ func (f *shutdownOnUpdateTautulli) UpdateMetadata(_ context.Context, _, _ string
 }
 
 func TestApplyRemappings_ShutdownDuringUpdateIsNotAFailure(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	o := New(&fakePlex{}, &shutdownOnUpdateTautulli{cancel: cancel}, &config.Config{DryRun: false})
 	matched := []remap.MatchResult{
 		{Title: "A", OldKey: "1", NewKey: "2", MediaType: remap.Movie, Method: remap.MethodGUID},
@@ -1541,7 +1545,7 @@ func TestRun_DryRunWithMatch_PreviewsClear(t *testing.T) {
 	})
 	cfg.DryRun = true
 	orch := newOrch(t, cfg)
-	if !orch.Run(context.Background()) {
+	if !orch.Run(t.Context()) {
 		t.Fatal("Run() = false, want true (a dry-run with a successful match is a successful pass)")
 	}
 	out := buf.String()
@@ -1583,7 +1587,7 @@ func TestResolveStaleShows(t *testing.T) {
 	}}
 	o := New(fp, &fakeTautulli{}, &config.Config{})
 
-	resolved := o.resolveStaleShows(context.Background(), stale)
+	resolved := o.resolveStaleShows(t.Context(), stale)
 	if len(resolved) != 1 {
 		t.Fatalf("resolved = %v, want exactly {10:11}", resolved)
 	}
@@ -1611,7 +1615,7 @@ func TestResolveOneShow_TriesUntilResolvedToleratingErrors(t *testing.T) {
 	}}
 	o := New(fp, &fakeTautulli{}, &config.Config{})
 
-	got := o.resolveOneShow(context.Background(),
+	got := o.resolveOneShow(t.Context(),
 		[]string{"plex://episode/err", "plex://episode/miss", "plex://episode/hit"})
 	if got != "500" {
 		t.Errorf("resolveOneShow = %q, want 500", got)
