@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/cplieger/envx"
+	"github.com/cplieger/envx/v2"
 )
 
 func TestLoad(t *testing.T) {
@@ -87,7 +87,7 @@ func TestLoad_MissingRequiredEnv(t *testing.T) {
 		name      string
 		apiKey    string
 		plexToken string
-		wantKey   string
+		wantKey   envx.Key
 	}{
 		{"missing api key", "", "token", "TAUTULLI_APIKEY"},
 		{"missing plex token", "key", "", "PLEX_TOKEN"},
@@ -106,7 +106,7 @@ func TestLoad_MissingRequiredEnv(t *testing.T) {
 			if merr.Key != tt.wantKey {
 				t.Errorf("MissingError.Key = %q, want %q", merr.Key, tt.wantKey)
 			}
-			if !strings.Contains(err.Error(), tt.wantKey) {
+			if !strings.Contains(err.Error(), string(tt.wantKey)) {
 				t.Errorf("error message %q does not mention %q", err.Error(), tt.wantKey)
 			}
 		})
@@ -212,11 +212,11 @@ func TestParseScheduleInterval_rejectsInvalid(t *testing.T) {
 	}
 }
 
-// TestLogConfig_LogsScheduleMode pins the schedule-mode label LogConfig emits:
+// TestLog_LogsScheduleMode pins the schedule-mode label Log emits:
 // the "resident-idle" sentinel when the interval is zero, and the duration's
 // String() form when scheduled. It guards the cfg.ScheduleInterval > 0 branch
 // (a >= 0 mutation would log "0s" instead of "resident-idle").
-func TestLogConfig_LogsScheduleMode(t *testing.T) {
+func TestLog_LogsScheduleMode(t *testing.T) {
 	tests := []struct {
 		name     string
 		interval time.Duration
@@ -228,41 +228,41 @@ func TestLogConfig_LogsScheduleMode(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			getLogs := captureLogs(t)
-			LogConfig(&Config{ScheduleInterval: tt.interval})
+			(&Config{ScheduleInterval: tt.interval}).Log()
 			if logs := getLogs(); !strings.Contains(logs, "schedule_interval="+tt.wantMode) {
-				t.Errorf("LogConfig logged %q, want schedule_interval=%q", logs, tt.wantMode)
+				t.Errorf("Log logged %q, want schedule_interval=%q", logs, tt.wantMode)
 			}
 		})
 	}
 }
 
-// TestLogConfig_neverLogsSecrets pins the documented "API tokens are never
-// logged" contract: LogConfig emits URLs, dry-run, fallbacks, and the schedule
+// TestLog_neverLogsSecrets pins the documented "API tokens are never
+// logged" contract: Log emits URLs, dry-run, fallbacks, and the schedule
 // mode, but must never place the Tautulli API key or Plex token into a log
 // attribute.
-func TestLogConfig_neverLogsSecrets(t *testing.T) {
+func TestLog_neverLogsSecrets(t *testing.T) {
 	const (
 		apiKey = "SECRET-TAUTULLI-APIKEY-sentinel"
 		token  = "SECRET-PLEX-TOKEN-sentinel"
 	)
 	getLogs := captureLogs(t)
-	LogConfig(&Config{
+	(&Config{
 		TautulliURL:      "http://tautulli:8181",
 		TautulliAPIKey:   apiKey,
 		PlexURL:          "http://plex:32400",
 		PlexToken:        token,
 		ScheduleInterval: 24 * time.Hour,
-	})
+	}).Log()
 	logs := getLogs()
 	if strings.Contains(logs, apiKey) {
-		t.Errorf("LogConfig leaked the Tautulli API key into logs: %q", logs)
+		t.Errorf("Log leaked the Tautulli API key into logs: %q", logs)
 	}
 	if strings.Contains(logs, token) {
-		t.Errorf("LogConfig leaked the Plex token into logs: %q", logs)
+		t.Errorf("Log leaked the Plex token into logs: %q", logs)
 	}
 }
 
-func TestLogConfig_logsConfigAttributes(t *testing.T) {
+func TestLog_logsConfigAttributes(t *testing.T) {
 	live := Config{
 		TautulliURL:       "http://tautulli:8181",
 		PlexURL:           "http://plex:32400",
@@ -298,9 +298,9 @@ func TestLogConfig_logsConfigAttributes(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			getLogs := captureLogs(t)
 			cfg := tt.cfg
-			LogConfig(&cfg)
+			cfg.Log()
 			if logs := getLogs(); !strings.Contains(logs, tt.want) {
-				t.Errorf("LogConfig missing %q; logs=%q", tt.want, logs)
+				t.Errorf("Log missing %q; logs=%q", tt.want, logs)
 			}
 		})
 	}

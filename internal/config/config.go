@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/cplieger/envx"
+	"github.com/cplieger/envx/v2"
 )
 
 // DefaultMaxHistoryRecords is the default sanity cap on the Tautulli history
@@ -99,11 +99,11 @@ func parseScheduleInterval(raw string) time.Duration {
 	return d
 }
 
-// LogConfig logs the active configuration at startup.
+// Log logs the active configuration at startup.
 // It deliberately omits TautulliAPIKey and PlexToken: per the project's hard
 // "API tokens never logged" contract, no secret may be added to this (or any)
 // log call. Do not add cfg.TautulliAPIKey or cfg.PlexToken here.
-func LogConfig(cfg *Config) {
+func (cfg *Config) Log() {
 	mode := "resident-idle"
 	if cfg.ScheduleInterval > 0 {
 		mode = cfg.ScheduleInterval.String()
@@ -124,7 +124,7 @@ func LogConfig(cfg *Config) {
 // warning: such a value fails upstream authentication, so it is worth
 // flagging while still returning it. The secret value itself is never
 // logged.
-func requireSecret(key string) (string, error) {
+func requireSecret(key envx.Key) (string, error) {
 	v, err := envx.Require(key)
 	if err != nil {
 		return "", err

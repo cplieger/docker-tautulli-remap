@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/cplieger/runesafe"
+	"github.com/cplieger/runesafe/v2"
 	"pgregory.net/rapid"
 )
 
@@ -118,7 +118,7 @@ func TestMatchStaleItems_partition_property(t *testing.T) {
 			}
 		}
 
-		matched, unmatched := MatchStaleItems(stale, nil, byGUID, byTitleYear, byTitle, true, true)
+		matched, unmatched := MatchStaleItems(stale, nil, Index{ByGUID: byGUID, ByTitleYear: byTitleYear, ByTitle: byTitle}, Fallbacks{TitleYear: true, TitleOnly: true})
 
 		seen := map[string]bool{}
 		for _, m := range matched {

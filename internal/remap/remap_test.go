@@ -83,7 +83,7 @@ func TestMatchOne(t *testing.T) {
 	t.Run("guid match", func(t *testing.T) {
 		item := &TautulliEntry{GUID: "imdb://tt1", Title: "M", Year: "2020", MediaType: Movie}
 		byGUID := map[string]PlexEntry{"imdb://tt1": {RatingKey: "200", Type: Movie}}
-		key, method, matchedYear := matchOne(item, "100", nil, byGUID, nil, nil, true, true)
+		key, method, matchedYear := matchOne(item, "100", nil, Index{ByGUID: byGUID}, Fallbacks{TitleYear: true, TitleOnly: true})
 		if key != "200" || method != MethodGUID {
 			t.Errorf("got (%q, %q), want (200, guid)", key, method)
 		}
@@ -100,7 +100,7 @@ func TestMatchOne(t *testing.T) {
 		// be remapped onto the wrong-type item.
 		item := &TautulliEntry{GUID: "tmdb://12345", Title: "Quiz Show", Year: "1994", MediaType: Movie}
 		byGUID := map[string]PlexEntry{"tmdb://12345": {RatingKey: "200", Title: "Quiz Show", Year: "1994", Type: Show}}
-		key, method, matchedYear := matchOne(item, "100", nil, byGUID, nil, nil, true, true)
+		key, method, matchedYear := matchOne(item, "100", nil, Index{ByGUID: byGUID}, Fallbacks{TitleYear: true, TitleOnly: true})
 		if key != "" || method != "" || matchedYear != "" {
 			t.Errorf("got (%q, %q, %q), want empty (GUID strategy must reject a cross-type match)", key, method, matchedYear)
 		}
@@ -109,7 +109,7 @@ func TestMatchOne(t *testing.T) {
 	t.Run("title+year fallback", func(t *testing.T) {
 		item := &TautulliEntry{Title: "Movie", Year: "2020", MediaType: Movie}
 		byTY := map[string]PlexEntry{titleYearKey("movie", "2020", Movie): {RatingKey: "200", Type: Movie}}
-		key, method, matchedYear := matchOne(item, "100", nil, nil, byTY, nil, true, true)
+		key, method, matchedYear := matchOne(item, "100", nil, Index{ByTitleYear: byTY}, Fallbacks{TitleYear: true, TitleOnly: true})
 		if key != "200" || method != MethodTitleYear {
 			t.Errorf("got (%q, %q), want (200, title+year)", key, method)
 		}
@@ -120,7 +120,7 @@ func TestMatchOne(t *testing.T) {
 
 	t.Run("no match", func(t *testing.T) {
 		item := &TautulliEntry{Title: "X", Year: "2020", MediaType: Movie}
-		key, method, matchedYear := matchOne(item, "100", nil, nil, nil, nil, true, true)
+		key, method, matchedYear := matchOne(item, "100", nil, Index{}, Fallbacks{TitleYear: true, TitleOnly: true})
 		if key != "" || method != "" || matchedYear != "" {
 			t.Errorf("got (%q, %q, %q), want empty", key, method, matchedYear)
 		}
@@ -132,7 +132,7 @@ func TestMatchOne(t *testing.T) {
 		item := &TautulliEntry{Title: "Show", Year: "2021", MediaType: Show, GUID: "tvdb://1"}
 		byGUID := map[string]PlexEntry{"tvdb://1": {RatingKey: "999", Type: Show}}
 		resolved := map[string]string{"100": "200"}
-		key, method, matchedYear := matchOne(item, "100", resolved, byGUID, nil, nil, true, true)
+		key, method, matchedYear := matchOne(item, "100", resolved, Index{ByGUID: byGUID}, Fallbacks{TitleYear: true, TitleOnly: true})
 		if key != "200" || method != MethodEpisodeGUID {
 			t.Errorf("got (%q, %q), want (200, episode-guid)", key, method)
 		}
@@ -144,7 +144,7 @@ func TestMatchOne(t *testing.T) {
 	t.Run("episode-guid resolution to the same key is not a match", func(t *testing.T) {
 		item := &TautulliEntry{Title: "Show", Year: "2021", MediaType: Show}
 		resolved := map[string]string{"100": "100"} // unchanged key
-		key, method, matchedYear := matchOne(item, "100", resolved, nil, nil, nil, true, true)
+		key, method, matchedYear := matchOne(item, "100", resolved, Index{}, Fallbacks{TitleYear: true, TitleOnly: true})
 		if key != "" || method != "" || matchedYear != "" {
 			t.Errorf("got (%q, %q, %q), want empty (a no-op resolution must not match)", key, method, matchedYear)
 		}
@@ -609,7 +609,7 @@ func TestMatchStaleItems(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			matched, unmatched := MatchStaleItems(tt.stale, nil, tt.byGUID, tt.byTitleYear, tt.byTitle, tt.enableTY, tt.enableTO)
+			matched, unmatched := MatchStaleItems(tt.stale, nil, Index{ByGUID: tt.byGUID, ByTitleYear: tt.byTitleYear, ByTitle: tt.byTitle}, Fallbacks{TitleYear: tt.enableTY, TitleOnly: tt.enableTO})
 			for _, c := range tt.checks {
 				c(t, matched, unmatched)
 			}
@@ -651,7 +651,7 @@ func TestMatchOne_titleYearTakesPriorityOverTitleOnly(t *testing.T) {
 	item := &TautulliEntry{Title: "Dune", Year: "2020", MediaType: Movie}
 	byTitleYear := map[string]PlexEntry{titleYearKey("dune", "2020", Movie): {RatingKey: "200", Title: "Dune", Year: "2020", Type: Movie}}
 	byTitle := map[string]PlexEntry{titleKey("dune", Movie): {RatingKey: "300", Title: "Dune", Year: "2021", Type: Movie}}
-	key, method, matchedYear := matchOne(item, "100", nil, nil, byTitleYear, byTitle, true, true)
+	key, method, matchedYear := matchOne(item, "100", nil, Index{ByTitleYear: byTitleYear, ByTitle: byTitle}, Fallbacks{TitleYear: true, TitleOnly: true})
 	if key != "200" {
 		t.Errorf("matchOne key = %q, want 200 (title+year must win over title-only)", key)
 	}
@@ -670,7 +670,7 @@ func TestMatchOne_titleOnlyCarriesYearTransition(t *testing.T) {
 	// matched entry's year) for the operator-facing remap log line.
 	item := &TautulliEntry{Title: "Dune", Year: "1984", MediaType: Movie}
 	byTitle := map[string]PlexEntry{titleKey("dune", Movie): {RatingKey: "300", Title: "Dune", Year: "2021", Type: Movie}}
-	key, method, matchedYear := matchOne(item, "100", nil, nil, nil, byTitle, true, true)
+	key, method, matchedYear := matchOne(item, "100", nil, Index{ByTitle: byTitle}, Fallbacks{TitleYear: true, TitleOnly: true})
 	if key != "300" {
 		t.Errorf("matchOne key = %q, want 300", key)
 	}
@@ -694,7 +694,7 @@ func TestMatchStaleItems_EpisodeGUIDResolution(t *testing.T) {
 	}
 	resolved := map[string]string{"100": "200"}
 
-	matched, unmatched := MatchStaleItems(stale, resolved, nil, nil, nil, true, true)
+	matched, unmatched := MatchStaleItems(stale, resolved, Index{}, Fallbacks{TitleYear: true, TitleOnly: true})
 	if len(matched) != 1 || len(unmatched) != 0 {
 		t.Fatalf("matched=%d unmatched=%d, want 1/0", len(matched), len(unmatched))
 	}
@@ -730,5 +730,30 @@ func TestProcessHistoryRow_UnknownMediaTypeSkipped(t *testing.T) {
 	}
 	if _, ok := items["7"]; ok {
 		t.Errorf("track row should have been skipped, but items[7] exists: %+v", items["7"])
+	}
+}
+
+// TestIndexEmpty pins the orchestrator's "cannot match anything" abort
+// signal directly, so the abort test cannot be Empty's only oracle: Empty is
+// true exactly when all three strategies have zero entries, and one entry in
+// ANY strategy makes the index usable.
+func TestIndexEmpty(t *testing.T) {
+	entry := map[string]PlexEntry{"k": {RatingKey: "1"}}
+	cases := map[string]struct {
+		idx  Index
+		want bool
+	}{
+		"zero value is empty":            {Index{}, true},
+		"empty non-nil maps are empty":   {Index{ByGUID: map[string]PlexEntry{}, ByTitleYear: map[string]PlexEntry{}, ByTitle: map[string]PlexEntry{}}, true},
+		"one GUID entry is not empty":    {Index{ByGUID: entry}, false},
+		"one title+year entry not empty": {Index{ByTitleYear: entry}, false},
+		"one title entry is not empty":   {Index{ByTitle: entry}, false},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			if got := tc.idx.Empty(); got != tc.want {
+				t.Errorf("Index.Empty() = %v, want %v", got, tc.want)
+			}
+		})
 	}
 }

@@ -15,7 +15,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/cplieger/runesafe"
+	"github.com/cplieger/runesafe/v2"
 	"github.com/cplieger/tautulli-remap/internal/config"
 	"github.com/cplieger/tautulli-remap/internal/plex"
 	"github.com/cplieger/tautulli-remap/internal/remap"
@@ -422,36 +422,36 @@ func TestBuildPlexIndex_AllThreeIndexes(t *testing.T) {
 	if perr != nil {
 		t.Fatalf("plex.New: %v", perr)
 	}
-	byGUID, byTitleYear, byTitle, failed := remap.BuildPlexIndex(t.Context(), pc, 8)
+	idx, failed := remap.BuildPlexIndex(t.Context(), pc, 8)
 	if failed != 0 {
 		t.Errorf("failedSections = %d, want 0 (all scanned sections returned 200)", failed)
 	}
 
-	if _, ok := byGUID["imdb://tt0133093"]; !ok {
-		t.Error("expected imdb GUID in byGUID")
+	if _, ok := idx.ByGUID["imdb://tt0133093"]; !ok {
+		t.Error("expected imdb GUID in idx.ByGUID")
 	}
-	if _, ok := byGUID["plex://movie/abc"]; !ok {
-		t.Error("expected plex movie GUID in byGUID")
+	if _, ok := idx.ByGUID["plex://movie/abc"]; !ok {
+		t.Error("expected plex movie GUID in idx.ByGUID")
 	}
-	if _, ok := byGUID["tvdb://81189"]; !ok {
-		t.Error("expected tvdb GUID in byGUID")
+	if _, ok := idx.ByGUID["tvdb://81189"]; !ok {
+		t.Error("expected tvdb GUID in idx.ByGUID")
 	}
 	// These assertions deliberately do not spell the index key: its encoding is
 	// remap's private business (remap.titleYearKey / remap.titleKey), and a literal
 	// here would re-freeze that encoding in a package that never builds a key.
 	// What this test cares about is that both a movie and a show got indexed
 	// into all three maps.
-	if !hasIndexedEntry(byTitleYear, "The Matrix", "1999", remap.Movie) {
-		t.Error("expected the movie (The Matrix, 1999) in byTitleYear")
+	if !hasIndexedEntry(idx.ByTitleYear, "The Matrix", "1999", remap.Movie) {
+		t.Error("expected the movie (The Matrix, 1999) in idx.ByTitleYear")
 	}
-	if !hasIndexedEntry(byTitleYear, "Breaking Bad", "2008", remap.Show) {
-		t.Error("expected the show (Breaking Bad, 2008) in byTitleYear")
+	if !hasIndexedEntry(idx.ByTitleYear, "Breaking Bad", "2008", remap.Show) {
+		t.Error("expected the show (Breaking Bad, 2008) in idx.ByTitleYear")
 	}
-	if !hasIndexedEntry(byTitle, "The Matrix", "1999", remap.Movie) {
-		t.Error("expected the movie (The Matrix) in byTitle")
+	if !hasIndexedEntry(idx.ByTitle, "The Matrix", "1999", remap.Movie) {
+		t.Error("expected the movie (The Matrix) in idx.ByTitle")
 	}
-	if !hasIndexedEntry(byTitle, "Breaking Bad", "2008", remap.Show) {
-		t.Error("expected the show (Breaking Bad) in byTitle")
+	if !hasIndexedEntry(idx.ByTitle, "Breaking Bad", "2008", remap.Show) {
+		t.Error("expected the show (Breaking Bad) in idx.ByTitle")
 	}
 }
 
@@ -482,11 +482,11 @@ func TestBuildPlexIndex_SkipsNonMovieShowSections(t *testing.T) {
 	if perr != nil {
 		t.Fatalf("plex.New: %v", perr)
 	}
-	byGUID, byTitleYear, byTitle, failed := remap.BuildPlexIndex(t.Context(), pc, 8)
+	idx, failed := remap.BuildPlexIndex(t.Context(), pc, 8)
 	if failed != 0 {
 		t.Errorf("failedSections = %d, want 0 (non-movie/show sections are skipped, not failed)", failed)
 	}
-	if len(byGUID) != 0 || len(byTitleYear) != 0 || len(byTitle) != 0 {
+	if len(idx.ByGUID) != 0 || len(idx.ByTitleYear) != 0 || len(idx.ByTitle) != 0 {
 		t.Error("expected empty indexes for music-only library")
 	}
 }
@@ -511,11 +511,11 @@ func TestBuildPlexIndex_CancelBetweenSections(t *testing.T) {
 	if perr != nil {
 		t.Fatalf("plex.New: %v", perr)
 	}
-	byGUID, byTitleYear, byTitle, _ := remap.BuildPlexIndex(ctx, pc, 1)
+	idx, _ := remap.BuildPlexIndex(ctx, pc, 1)
 	if got := sectionAllHits.Load(); got != 1 {
 		t.Errorf("expected 1 section fetch before cancel, got %d", got)
 	}
-	if len(byGUID) != 0 || len(byTitleYear) != 0 || len(byTitle) != 0 {
+	if !idx.Empty() {
 		t.Errorf("expected empty indexes on early cancel")
 	}
 }
