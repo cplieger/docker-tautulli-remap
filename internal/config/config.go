@@ -3,6 +3,7 @@
 package config
 
 import (
+	"cmp"
 	"log/slog"
 	"strings"
 	"time"
@@ -35,7 +36,7 @@ type Config struct {
 // before (and without) a full config load, which would fail on missing
 // secrets the probe does not need.
 func ScheduleInterval() time.Duration {
-	return parseScheduleInterval(envx.String("SCHEDULE_INTERVAL", "off"))
+	return parseScheduleInterval(cmp.Or(envx.String("SCHEDULE_INTERVAL"), "off"))
 }
 
 // Load parses environment variables and returns the configuration.
@@ -52,9 +53,9 @@ func Load() (*Config, error) {
 	}
 
 	return &Config{
-		TautulliURL:       envx.String("TAUTULLI_URL", "http://tautulli:8181"),
+		TautulliURL:       cmp.Or(envx.String("TAUTULLI_URL"), "http://tautulli:8181"),
 		TautulliAPIKey:    apiKey,
-		PlexURL:           envx.String("PLEX_URL", "http://plex:32400"),
+		PlexURL:           cmp.Or(envx.String("PLEX_URL"), "http://plex:32400"),
 		PlexToken:         token,
 		ScheduleInterval:  interval,
 		MaxHistoryRecords: maxHistoryRecords(),
