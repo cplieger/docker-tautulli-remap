@@ -43,7 +43,7 @@ func TestBuildPlexIndex_TitleYearCollisionRefusesToMatch(t *testing.T) {
 	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug})))
 	t.Cleanup(func() { slog.SetDefault(prev) })
 
-	byGUID, byTitleYear, byTitle, failed := BuildPlexIndex(t.Context(), fetcher, 1)
+	idx, failed := BuildPlexIndex(t.Context(), fetcher, 1)
 	if failed != 0 {
 		t.Errorf("failedSections = %d, want 0 (fetcher never errors)", failed)
 	}
@@ -51,18 +51,18 @@ func TestBuildPlexIndex_TitleYearCollisionRefusesToMatch(t *testing.T) {
 	// A collision on the title+year and title keys means the slot is ambiguous,
 	// so it is removed entirely (refuse to match) rather than resolved by the
 	// last writer.
-	if _, ok := byTitleYear[titleYearKey("heat", "1995", Movie)]; ok {
-		t.Errorf("byTitleYear[(heat, 1995, movie)] = %q, want ABSENT (ambiguous slot must be removed)", byTitleYear[titleYearKey("heat", "1995", Movie)].RatingKey)
+	if _, ok := idx.ByTitleYear[titleYearKey("heat", "1995", Movie)]; ok {
+		t.Errorf("idx.ByTitleYear[(heat, 1995, movie)] = %q, want ABSENT (ambiguous slot must be removed)", idx.ByTitleYear[titleYearKey("heat", "1995", Movie)].RatingKey)
 	}
-	if _, ok := byTitle[titleKey("heat", Movie)]; ok {
-		t.Errorf("byTitle[(heat, movie)] = %q, want ABSENT (ambiguous slot must be removed)", byTitle[titleKey("heat", Movie)].RatingKey)
+	if _, ok := idx.ByTitle[titleKey("heat", Movie)]; ok {
+		t.Errorf("idx.ByTitle[(heat, movie)] = %q, want ABSENT (ambiguous slot must be removed)", idx.ByTitle[titleKey("heat", Movie)].RatingKey)
 	}
 	// The two GUIDs are distinct, so neither collided; both are kept.
-	if got := byGUID["imdb://tt0001"].RatingKey; got != "1" {
-		t.Errorf("byGUID[tt0001].RatingKey = %q, want %q (distinct GUIDs both kept)", got, "1")
+	if got := idx.ByGUID["imdb://tt0001"].RatingKey; got != "1" {
+		t.Errorf("idx.ByGUID[tt0001].RatingKey = %q, want %q (distinct GUIDs both kept)", got, "1")
 	}
-	if got := byGUID["imdb://tt0002"].RatingKey; got != "2" {
-		t.Errorf("byGUID[tt0002].RatingKey = %q, want %q (distinct GUIDs both kept)", got, "2")
+	if got := idx.ByGUID["imdb://tt0002"].RatingKey; got != "2" {
+		t.Errorf("idx.ByGUID[tt0002].RatingKey = %q, want %q (distinct GUIDs both kept)", got, "2")
 	}
 	logged := buf.String()
 	if !strings.Contains(logged, "title+year index shadow") {
@@ -89,10 +89,10 @@ func TestBuildPlexIndex_SameKeyReindexedNoShadow(t *testing.T) {
 	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug})))
 	t.Cleanup(func() { slog.SetDefault(prev) })
 
-	_, byTitleYear, _, _ := BuildPlexIndex(t.Context(), fetcher, 1)
+	idx, _ := BuildPlexIndex(t.Context(), fetcher, 1)
 
-	if got := byTitleYear[titleYearKey("dune", "2021", Movie)].RatingKey; got != "7" {
-		t.Errorf("byTitleYear[(dune, 2021, movie)].RatingKey = %q, want %q", got, "7")
+	if got := idx.ByTitleYear[titleYearKey("dune", "2021", Movie)].RatingKey; got != "7" {
+		t.Errorf("idx.ByTitleYear[(dune, 2021, movie)].RatingKey = %q, want %q", got, "7")
 	}
 	if strings.Contains(buf.String(), "shadow") {
 		t.Errorf("did not expect a shadow log for an idempotent same-key re-add, got:\n%s", buf.String())
@@ -142,23 +142,23 @@ func TestBuildPlexIndex_ReportsFailedSections(t *testing.T) {
 		failSection: "2",
 	}
 
-	_, byTitleYear, _, failed := BuildPlexIndex(t.Context(), fetcher, 1)
+	idx, failed := BuildPlexIndex(t.Context(), fetcher, 1)
 
 	if failed != 1 {
 		t.Errorf("failedSections = %d, want 1 (one section errored)", failed)
 	}
-	if _, ok := byTitleYear[titleYearKey("heat", "1995", Movie)]; !ok {
+	if _, ok := idx.ByTitleYear[titleYearKey("heat", "1995", Movie)]; !ok {
 		t.Error("expected the section that loaded to still be indexed")
 	}
 }
 
 func TestBuildPlexIndex_SectionListError(t *testing.T) {
-	byGUID, byTitleYear, byTitle, failed := BuildPlexIndex(t.Context(), listErrorFetcher{}, 1)
+	idx, failed := BuildPlexIndex(t.Context(), listErrorFetcher{}, 1)
 
 	if failed == 0 {
 		t.Error("expected non-zero failedSections when the section list fetch fails")
 	}
-	if len(byGUID) != 0 || len(byTitleYear) != 0 || len(byTitle) != 0 {
+	if len(idx.ByGUID) != 0 || len(idx.ByTitleYear) != 0 || len(idx.ByTitle) != 0 {
 		t.Error("expected empty index when the section list fetch fails")
 	}
 }
@@ -179,14 +179,14 @@ func TestBuildPlexIndex_GUIDCollisionRefusesToMatch(t *testing.T) {
 	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug})))
 	t.Cleanup(func() { slog.SetDefault(prev) })
 
-	byGUID, _, _, failed := BuildPlexIndex(t.Context(), fetcher, 1)
+	idx, failed := BuildPlexIndex(t.Context(), fetcher, 1)
 	if failed != 0 {
 		t.Errorf("failedSections = %d, want 0 (fetcher never errors)", failed)
 	}
 	// The shared GUID collided on two different rating keys, so the slot is
 	// ambiguous and removed (refuse to match) rather than kept as last-writer.
-	if _, ok := byGUID["imdb://tt0113277"]; ok {
-		t.Errorf("byGUID[imdb://tt0113277] = %q, want ABSENT (ambiguous GUID slot must be removed)", byGUID["imdb://tt0113277"].RatingKey)
+	if _, ok := idx.ByGUID["imdb://tt0113277"]; ok {
+		t.Errorf("idx.ByGUID[imdb://tt0113277] = %q, want ABSENT (ambiguous GUID slot must be removed)", idx.ByGUID["imdb://tt0113277"].RatingKey)
 	}
 	logged := buf.String()
 	if !strings.Contains(logged, "guid index shadow") {
@@ -205,15 +205,15 @@ func TestBuildPlexIndex_ParallelismBelowOneStillIndexes(t *testing.T) {
 		},
 	}
 
-	byGUID, byTitleYear, _, failed := BuildPlexIndex(t.Context(), fetcher, 0)
+	idx, failed := BuildPlexIndex(t.Context(), fetcher, 0)
 	if failed != 0 {
 		t.Errorf("failedSections = %d, want 0", failed)
 	}
-	if got := byGUID["imdb://tt0113277"].RatingKey; got != "1" {
-		t.Errorf("byGUID[imdb://tt0113277].RatingKey = %q, want %q (indexed despite parallelism=0)", got, "1")
+	if got := idx.ByGUID["imdb://tt0113277"].RatingKey; got != "1" {
+		t.Errorf("idx.ByGUID[imdb://tt0113277].RatingKey = %q, want %q (indexed despite parallelism=0)", got, "1")
 	}
-	if got := byTitleYear[titleYearKey("heat", "1995", Movie)].RatingKey; got != "1" {
-		t.Errorf("byTitleYear[(heat, 1995, movie)].RatingKey = %q, want %q", got, "1")
+	if got := idx.ByTitleYear[titleYearKey("heat", "1995", Movie)].RatingKey; got != "1" {
+		t.Errorf("idx.ByTitleYear[(heat, 1995, movie)].RatingKey = %q, want %q", got, "1")
 	}
 }
 
@@ -243,12 +243,12 @@ func TestBuildPlexIndex_CancelledBeforeScanIsNotAFailure(t *testing.T) {
 			"1": {{RatingKey: 1, Title: "Heat", Year: 1995, GUIDs: []string{"imdb://tt0113277"}}},
 		},
 	}
-	byGUID, _, _, failed := BuildPlexIndex(ctx, fetcher, 1)
+	idx, failed := BuildPlexIndex(ctx, fetcher, 1)
 	if failed != 0 {
 		t.Errorf("failedSections = %d, want 0 (a context cancelled before the scan is shutdown, not a Plex failure)", failed)
 	}
-	if len(byGUID) != 0 {
-		t.Errorf("byGUID has %d entries, want 0 (a cancelled scan must index nothing)", len(byGUID))
+	if len(idx.ByGUID) != 0 {
+		t.Errorf("idx.ByGUID has %d entries, want 0 (a cancelled scan must index nothing)", len(idx.ByGUID))
 	}
 }
 
@@ -258,7 +258,7 @@ func TestBuildPlexIndex_CancelledMidFetchIsNotAFailure(t *testing.T) {
 		sections: []Section{{Key: "1", Title: "Movies", Type: "movie"}},
 		cancel:   cancel,
 	}
-	_, _, _, failed := BuildPlexIndex(ctx, fetcher, 1)
+	_, failed := BuildPlexIndex(ctx, fetcher, 1)
 	if failed != 0 {
 		t.Errorf("failedSections = %d, want 0 (a fetch error caused by context cancellation is shutdown, not a Plex failure)", failed)
 	}
@@ -275,23 +275,23 @@ func TestBuildPlexIndex_SkipsNonMovieShowSections(t *testing.T) {
 			"2": {{RatingKey: 9, Title: "Some Album", Year: 2001, GUIDs: []string{"mbid://abc"}}},
 		},
 	}
-	byGUID, byTitleYear, byTitle, failed := BuildPlexIndex(t.Context(), fetcher, 1)
+	idx, failed := BuildPlexIndex(t.Context(), fetcher, 1)
 	if failed != 0 {
 		t.Errorf("failedSections = %d, want 0", failed)
 	}
-	if _, ok := byGUID["imdb://tt0113277"]; !ok {
+	if _, ok := idx.ByGUID["imdb://tt0113277"]; !ok {
 		t.Error("expected the movie section to be indexed")
 	}
-	if _, ok := byGUID["mbid://abc"]; ok {
+	if _, ok := idx.ByGUID["mbid://abc"]; ok {
 		t.Error("non-movie/show (artist) section must be skipped, but its GUID was indexed")
 	}
 	// If the skip guard regressed, the artist item would be indexed with an
 	// empty media type (ParseMediaType("artist") == ""), i.e. under the (some album, "") and
 	// (some album, 2001, "") slots. Assert those exact slots stay absent.
-	if _, ok := byTitle[titleKey("some album", MediaType(""))]; ok {
+	if _, ok := idx.ByTitle[titleKey("some album", MediaType(""))]; ok {
 		t.Error("non-movie/show (artist) section must be skipped, but its title was indexed")
 	}
-	if _, ok := byTitleYear[titleYearKey("some album", "2001", MediaType(""))]; ok {
+	if _, ok := idx.ByTitleYear[titleYearKey("some album", "2001", MediaType(""))]; ok {
 		t.Error("non-movie/show (artist) section must be skipped, but its title+year was indexed")
 	}
 }
@@ -312,24 +312,24 @@ func TestBuildPlexIndex_TitleOnlyCollisionKeepsTitleYearMatchable(t *testing.T) 
 		},
 	}
 
-	byGUID, byTitleYear, byTitle, failed := BuildPlexIndex(t.Context(), fetcher, 1)
+	idx, failed := BuildPlexIndex(t.Context(), fetcher, 1)
 	if failed != 0 {
 		t.Errorf("failedSections = %d, want 0 (fetcher never errors)", failed)
 	}
-	if _, ok := byTitle[titleKey("dune", Movie)]; ok {
-		t.Errorf("byTitle[(dune, movie)] = %q, want ABSENT (title-only slot is ambiguous)", byTitle[titleKey("dune", Movie)].RatingKey)
+	if _, ok := idx.ByTitle[titleKey("dune", Movie)]; ok {
+		t.Errorf("idx.ByTitle[(dune, movie)] = %q, want ABSENT (title-only slot is ambiguous)", idx.ByTitle[titleKey("dune", Movie)].RatingKey)
 	}
-	if got := byTitleYear[titleYearKey("dune", "2021", Movie)].RatingKey; got != "1" {
-		t.Errorf("byTitleYear[(dune, 2021, movie)].RatingKey = %q, want %q (non-colliding title+year slot must stay matchable)", got, "1")
+	if got := idx.ByTitleYear[titleYearKey("dune", "2021", Movie)].RatingKey; got != "1" {
+		t.Errorf("idx.ByTitleYear[(dune, 2021, movie)].RatingKey = %q, want %q (non-colliding title+year slot must stay matchable)", got, "1")
 	}
-	if got := byTitleYear[titleYearKey("dune", "1984", Movie)].RatingKey; got != "2" {
-		t.Errorf("byTitleYear[(dune, 1984, movie)].RatingKey = %q, want %q (non-colliding title+year slot must stay matchable)", got, "2")
+	if got := idx.ByTitleYear[titleYearKey("dune", "1984", Movie)].RatingKey; got != "2" {
+		t.Errorf("idx.ByTitleYear[(dune, 1984, movie)].RatingKey = %q, want %q (non-colliding title+year slot must stay matchable)", got, "2")
 	}
-	if got := byGUID["imdb://tt1"].RatingKey; got != "1" {
-		t.Errorf("byGUID[imdb://tt1].RatingKey = %q, want %q", got, "1")
+	if got := idx.ByGUID["imdb://tt1"].RatingKey; got != "1" {
+		t.Errorf("idx.ByGUID[imdb://tt1].RatingKey = %q, want %q", got, "1")
 	}
-	if got := byGUID["imdb://tt2"].RatingKey; got != "2" {
-		t.Errorf("byGUID[imdb://tt2].RatingKey = %q, want %q", got, "2")
+	if got := idx.ByGUID["imdb://tt2"].RatingKey; got != "2" {
+		t.Errorf("idx.ByGUID[imdb://tt2].RatingKey = %q, want %q", got, "2")
 	}
 }
 
@@ -351,24 +351,24 @@ func TestMatch_CrossTypeSameTitleYear_RecoversMovieMatch(t *testing.T) {
 		},
 	}
 
-	byGUID, byTitleYear, byTitle, failed := BuildPlexIndex(t.Context(), fetcher, 1)
+	idx, failed := BuildPlexIndex(t.Context(), fetcher, 1)
 	if failed != 0 {
 		t.Fatalf("failedSections = %d, want 0 (fetcher never errors)", failed)
 	}
 	// Both type-specific title+year slots survive: distinct keys, no collision.
-	if got := byTitleYear[titleYearKey("dune", "2021", Movie)].RatingKey; got != "10" {
-		t.Errorf("byTitleYear[(dune, 2021, movie)] = %q, want 10 (movie slot must survive cross-type coexistence)", got)
+	if got := idx.ByTitleYear[titleYearKey("dune", "2021", Movie)].RatingKey; got != "10" {
+		t.Errorf("idx.ByTitleYear[(dune, 2021, movie)] = %q, want 10 (movie slot must survive cross-type coexistence)", got)
 	}
-	if got := byTitleYear[titleYearKey("dune", "2021", Show)].RatingKey; got != "20" {
-		t.Errorf("byTitleYear[(dune, 2021, show)] = %q, want 20 (show slot must survive cross-type coexistence)", got)
+	if got := idx.ByTitleYear[titleYearKey("dune", "2021", Show)].RatingKey; got != "20" {
+		t.Errorf("idx.ByTitleYear[(dune, 2021, show)] = %q, want 20 (show slot must survive cross-type coexistence)", got)
 	}
 
-	// Stale Movie whose GUID no longer resolves (absent from byGUID) falls back
+	// Stale Movie whose GUID no longer resolves (absent from idx.ByGUID) falls back
 	// to title+year and must land on the Movie, not the Show.
 	stale := map[string]TautulliEntry{
 		"99": {RatingKey: "99", Title: "Dune", Year: "2021", MediaType: Movie, GUID: "imdb://stale-gone"},
 	}
-	matched, unmatched := MatchStaleItems(stale, nil, byGUID, byTitleYear, byTitle, true, false)
+	matched, unmatched := MatchStaleItems(stale, nil, idx, Fallbacks{TitleYear: true, TitleOnly: false})
 	if len(matched) != 1 || len(unmatched) != 0 {
 		t.Fatalf("matched=%d unmatched=%d, want 1/0 (recovered same-type match)", len(matched), len(unmatched))
 	}
@@ -395,18 +395,18 @@ func TestMatch_SameTypeTitleYearTwin_StillRefusesToMatch(t *testing.T) {
 		},
 	}
 
-	byGUID, byTitleYear, byTitle, failed := BuildPlexIndex(t.Context(), fetcher, 1)
+	idx, failed := BuildPlexIndex(t.Context(), fetcher, 1)
 	if failed != 0 {
 		t.Fatalf("failedSections = %d, want 0 (fetcher never errors)", failed)
 	}
-	if _, ok := byTitleYear[titleYearKey("dune", "2021", Movie)]; ok {
-		t.Errorf("byTitleYear[(dune, 2021, movie)] present, want ABSENT (same-type twins must refuse-to-match)")
+	if _, ok := idx.ByTitleYear[titleYearKey("dune", "2021", Movie)]; ok {
+		t.Errorf("idx.ByTitleYear[(dune, 2021, movie)] present, want ABSENT (same-type twins must refuse-to-match)")
 	}
 
 	stale := map[string]TautulliEntry{
 		"99": {RatingKey: "99", Title: "Dune", Year: "2021", MediaType: Movie, GUID: "imdb://stale-gone"},
 	}
-	matched, unmatched := MatchStaleItems(stale, nil, byGUID, byTitleYear, byTitle, true, false)
+	matched, unmatched := MatchStaleItems(stale, nil, idx, Fallbacks{TitleYear: true, TitleOnly: false})
 	if len(matched) != 0 || len(unmatched) != 1 {
 		t.Fatalf("matched=%d unmatched=%d, want 0/1 (ambiguous slot pruned)", len(matched), len(unmatched))
 	}
@@ -420,7 +420,7 @@ func TestBuildPlexIndex_CrossSectionGUIDCollisionRefusesToMatch(t *testing.T) {
 	// last-writer-wins behavior. Every other BuildPlexIndex test runs at
 	// parallelism 0 or 1, so this is the only exercise of the concurrent
 	// fan-out path (and validates the add mutex under -race). Distinct titles
-	// keep the collision isolated to byGUID.
+	// keep the collision isolated to idx.ByGUID.
 	fetcher := &collidingFetcher{
 		sections: []Section{
 			{Key: "1", Title: "Movies", Type: "movie"},
@@ -431,12 +431,12 @@ func TestBuildPlexIndex_CrossSectionGUIDCollisionRefusesToMatch(t *testing.T) {
 			"2": {{RatingKey: 2, Title: "Heat 4K", Year: 1995, GUIDs: []string{"imdb://tt0113277"}}},
 		},
 	}
-	byGUID, _, _, failed := BuildPlexIndex(t.Context(), fetcher, 2)
+	idx, failed := BuildPlexIndex(t.Context(), fetcher, 2)
 	if failed != 0 {
 		t.Errorf("failedSections = %d, want 0 (fetcher never errors)", failed)
 	}
-	if _, ok := byGUID["imdb://tt0113277"]; ok {
-		t.Errorf("byGUID[imdb://tt0113277] = %q, want ABSENT (cross-section GUID collision must refuse-to-match under concurrency)", byGUID["imdb://tt0113277"].RatingKey)
+	if _, ok := idx.ByGUID["imdb://tt0113277"]; ok {
+		t.Errorf("idx.ByGUID[imdb://tt0113277] = %q, want ABSENT (cross-section GUID collision must refuse-to-match under concurrency)", idx.ByGUID["imdb://tt0113277"].RatingKey)
 	}
 }
 
@@ -689,7 +689,7 @@ func TestIndexKeysSeparatorCannotForgeAnotherSlot(t *testing.T) {
 			} else {
 				seenTY[ty] = tp
 			}
-			// The byTitle index drops the year, so only tuples differing in
+			// The ByTitle index drops the year, so only tuples differing in
 			// (title, mediaType) are required to differ here.
 			k := titleKey(tp.title, tp.mediaType)
 			if prev, dup := seenT[k]; dup && (prev.title != tp.title || prev.mediaType != tp.mediaType) {
@@ -715,17 +715,17 @@ func TestIndexKeysBuilderAndLookupAgree(t *testing.T) {
 			"1": {{RatingKey: 42, Title: "Dune | Extended Edition", Year: 2021}},
 		},
 	}
-	_, byTitleYear, byTitle, failed := BuildPlexIndex(t.Context(), fetcher, 1)
+	idx, failed := BuildPlexIndex(t.Context(), fetcher, 1)
 	if failed != 0 {
 		t.Fatalf("failedSections = %d, want 0", failed)
 	}
 
 	// Rebuild the lookup key exactly as matchOne does, from the same raw title.
 	normalized := NormalizeTitle("Dune | Extended Edition")
-	if got, ok := byTitleYear[titleYearKey(normalized, "2021", Movie)]; !ok || got.RatingKey != "42" {
-		t.Errorf("byTitleYear lookup for a separator-bearing title = (%+v, %v), want rating key 42 present", got, ok)
+	if got, ok := idx.ByTitleYear[titleYearKey(normalized, "2021", Movie)]; !ok || got.RatingKey != "42" {
+		t.Errorf("idx.ByTitleYear lookup for a separator-bearing title = (%+v, %v), want rating key 42 present", got, ok)
 	}
-	if got, ok := byTitle[titleKey(normalized, Movie)]; !ok || got.RatingKey != "42" {
-		t.Errorf("byTitle lookup for a separator-bearing title = (%+v, %v), want rating key 42 present", got, ok)
+	if got, ok := idx.ByTitle[titleKey(normalized, Movie)]; !ok || got.RatingKey != "42" {
+		t.Errorf("idx.ByTitle lookup for a separator-bearing title = (%+v, %v), want rating key 42 present", got, ok)
 	}
 }

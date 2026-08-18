@@ -11,8 +11,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/cplieger/httpx/v4"
-	"github.com/cplieger/scheduler/v3"
+	"github.com/cplieger/httpx/v5"
+	"github.com/cplieger/scheduler/v4"
 	"github.com/cplieger/tautulli-remap/internal/config"
 	"github.com/cplieger/tautulli-remap/internal/remap"
 	"github.com/cplieger/tautulli-remap/internal/tautulli"
@@ -179,7 +179,7 @@ func (o *Orchestrator) Run(ctx context.Context) bool {
 	}
 
 	// Step 3: Build Plex library index
-	byGUID, byTitleYear, byTitle, ok := o.buildIndex(ctx)
+	idx, ok := o.buildIndex(ctx)
 	if !ok {
 		return false
 	}
@@ -195,8 +195,8 @@ func (o *Orchestrator) Run(ctx context.Context) bool {
 
 	// Step 4: Match stale items
 	slog.Info("step 4: matching stale items")
-	matched, unmatched := remap.MatchStaleItems(stale, resolved, byGUID, byTitleYear, byTitle,
-		o.cfg.FallbackTitleYear, o.cfg.FallbackTitleOnly)
+	matched, unmatched := remap.MatchStaleItems(stale, resolved, idx,
+		remap.Fallbacks{TitleYear: o.cfg.FallbackTitleYear, TitleOnly: o.cfg.FallbackTitleOnly})
 
 	// Step 4.5: Backup, deferred until at least one mapping is ready to apply
 	// so a pass that finds nothing to mutate never spends a backup. It still
@@ -294,12 +294,12 @@ func logRunRefused(path string) {
 // buildIndex builds the Plex library index used for matching. It returns
 // ok=false (after logging the reason) when the run must abort before matching:
 // context cancellation, any failed library section, or a completely empty index.
-func (o *Orchestrator) buildIndex(ctx context.Context) (byGUID, byTitleYear, byTitle map[string]remap.PlexEntry, ok bool) {
+func (o *Orchestrator) buildIndex(ctx context.Context) (remap.Index, bool) {
 	slog.Info("step 3: building Plex library index")
-	byGUID, byTitleYear, byTitle, failedSections := remap.BuildPlexIndex(ctx, o.plex, plexParallelism)
+	idx, failedSections := remap.BuildPlexIndex(ctx, o.plex, plexParallelism)
 	if ctx.Err() != nil {
 		slog.Info("run cancelled during plex indexing", "cause", context.Cause(ctx))
-		return nil, nil, nil, false
+		return remap.Index{}, false
 	}
 	// Abort on any failed section before the all-empty check. A partial outage
 	// yields a non-empty but incomplete index (a stale item whose correct entry
@@ -312,13 +312,13 @@ func (o *Orchestrator) buildIndex(ctx context.Context) (byGUID, byTitleYear, byT
 	if failedSections > 0 {
 		slog.Error("aborting run: Plex returned errors for some library sections",
 			"failed_sections", failedSections)
-		return nil, nil, nil, false
+		return remap.Index{}, false
 	}
-	if len(byGUID) == 0 && len(byTitleYear) == 0 && len(byTitle) == 0 {
+	if idx.Empty() {
 		slog.Error("Plex library index is empty, cannot match stale items")
-		return nil, nil, nil, false
+		return remap.Index{}, false
 	}
-	return byGUID, byTitleYear, byTitle, true
+	return idx, true
 }
 
 // RunScheduler implements the long-running scheduled mode. The setHealthy
@@ -444,7 +444,8 @@ func (o *Orchestrator) fetchHistoryPage(ctx context.Context, start int) (*tautul
 
 // addHistoryPage processes one page of Tautulli history rows into items,
 // returning the number of episode GUIDs captured for later show resolution.
-func addHistoryPage(page *tautulli.HistoryPage, items map[string]remap.TautulliEntry) (captured int) {
+func addHistoryPage(page *tautulli.HistoryPage, items map[string]remap.TautulliEntry) int {
+	captured := 0
 	for i := range page.Rows {
 		if remap.ProcessHistoryRow(&page.Rows[i], items) {
 			captured++

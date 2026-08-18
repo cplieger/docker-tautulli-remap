@@ -1,4 +1,4 @@
-// Package plex adapts the shared github.com/cplieger/plexapi client to the
+// Package plex adapts the shared github.com/cplieger/plexapi/v2 client to the
 // remap workflow's types. The HTTP transport — token-in-header-only,
 // redirect refusal, same-origin path guard, transparent retry of transient
 // failures, bounded reads — is the library's; this package owns only the
@@ -12,8 +12,8 @@ import (
 	"log/slog"
 	"strconv"
 
-	"github.com/cplieger/plexapi"
-	"github.com/cplieger/runesafe"
+	"github.com/cplieger/plexapi/v2"
+	"github.com/cplieger/runesafe/v2"
 	"github.com/cplieger/tautulli-remap/internal/remap"
 )
 

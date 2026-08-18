@@ -45,19 +45,31 @@ func extractAfter(s, prefix string) string {
 	return after
 }
 
+// Fallbacks selects the title-based match strategies (config-driven; the
+// GUID strategies always run). Two adjacent positional bools were the other
+// half of the old signature hazard: swapped, they silently enabled the
+// looser strategy instead of the stricter one.
+type Fallbacks struct {
+	// TitleYear enables the title+year fallback.
+	TitleYear bool
+	// TitleOnly enables the title-only fallback (the loosest strategy; the
+	// one place a match's year can differ from the item's own).
+	TitleOnly bool
+}
+
 // matchOne applies the episode-GUID → GUID → title+year → title-only strategy
 // chain to a single stale item, returning the new Plex rating key and the
 // method string. Returns ("", "") when no strategy matched. Every strategy is
 // media-type-safe: strategy 0 (resolved) is populated only for shows, strategy
-// 1 guards on media type explicitly (byGUID is not type-keyed), and strategies
+// 1 guards on media type explicitly (Index.ByGUID is not type-keyed), and strategies
 // 2 and 3 look up keys that encode the media type (see titleYearKey/titleKey),
 // so a stale item never cross-type matches.
 func matchOne(
 	item *TautulliEntry,
 	oldKey string,
 	resolved map[string]string,
-	byGUID, byTitleYear, byTitle map[string]PlexEntry,
-	fallbackTitleYear, fallbackTitleOnly bool,
+	idx Index,
+	fb Fallbacks,
 ) (newKey string, method MatchMethod, matchedYear string) {
 	// Strategy 0: Episode-GUID resolution (shows only). The orchestrator has
 	// already looked up one of this stale show's watched episode GUIDs in Plex
@@ -69,7 +81,7 @@ func matchOne(
 		return rk, MethodEpisodeGUID, ""
 	}
 
-	// Strategy 1: Match by GUID. byGUID is keyed by the global, normalized GUID
+	// Strategy 1: Match by GUID. Index.ByGUID is keyed by the global, normalized GUID
 	// (not by media type), so a stale item and an index entry can share a GUID
 	// across types -- TMDB movies and TV series occupy the same tmdb://<id>
 	// namespace with no type tag. Guard on media type so a stale Movie is never
@@ -77,7 +89,7 @@ func matchOne(
 	// below cannot catch this because the GUID index is intentionally not
 	// type-keyed.
 	if item.GUID != "" {
-		if pe, ok := byGUID[item.GUID]; ok && pe.RatingKey != oldKey && pe.Type == item.MediaType {
+		if pe, ok := idx.ByGUID[item.GUID]; ok && pe.RatingKey != oldKey && pe.Type == item.MediaType {
 			return pe.RatingKey, MethodGUID, ""
 		}
 	}
@@ -85,7 +97,7 @@ func matchOne(
 	// Strategies 2 and 3: title-based fallbacks. Both lookup keys fold in the
 	// media type (see titleYearKey/titleKey), so a match is same-type by
 	// construction and needs no separate type guard.
-	return matchByTitle(item, oldKey, byTitleYear, byTitle, fallbackTitleYear, fallbackTitleOnly)
+	return matchByTitle(item, oldKey, idx, fb)
 }
 
 // matchByTitle applies the title+year and (optionally) title-only fallback
@@ -98,22 +110,22 @@ func matchOne(
 func matchByTitle(
 	item *TautulliEntry,
 	oldKey string,
-	byTitleYear, byTitle map[string]PlexEntry,
-	fallbackTitleYear, fallbackTitleOnly bool,
+	idx Index,
+	fb Fallbacks,
 ) (newKey string, method MatchMethod, matchedYear string) {
 	normalizedTitle := NormalizeTitle(item.Title.Raw())
 	if normalizedTitle == "" {
 		return "", "", ""
 	}
 
-	if fallbackTitleYear {
-		if pe, ok := byTitleYear[titleYearKey(normalizedTitle, item.Year, item.MediaType)]; ok && pe.RatingKey != oldKey {
+	if fb.TitleYear {
+		if pe, ok := idx.ByTitleYear[titleYearKey(normalizedTitle, item.Year, item.MediaType)]; ok && pe.RatingKey != oldKey {
 			return pe.RatingKey, MethodTitleYear, ""
 		}
 	}
 
-	if fallbackTitleOnly {
-		if pe, ok := byTitle[titleKey(normalizedTitle, item.MediaType)]; ok && pe.RatingKey != oldKey {
+	if fb.TitleOnly {
+		if pe, ok := idx.ByTitle[titleKey(normalizedTitle, item.MediaType)]; ok && pe.RatingKey != oldKey {
 			return pe.RatingKey, MethodTitleOnly, pe.Year
 		}
 	}
@@ -127,14 +139,14 @@ func matchByTitle(
 func MatchStaleItems(
 	stale map[string]TautulliEntry,
 	resolved map[string]string,
-	byGUID, byTitleYear, byTitle map[string]PlexEntry,
-	fallbackTitleYear, fallbackTitleOnly bool,
+	idx Index,
+	fb Fallbacks,
 ) ([]MatchResult, []UnmatchResult) {
 	var matched []MatchResult
 	var unmatched []UnmatchResult
 
 	for oldKey, item := range stale {
-		newKey, method, matchedYear := matchOne(&item, oldKey, resolved, byGUID, byTitleYear, byTitle, fallbackTitleYear, fallbackTitleOnly)
+		newKey, method, matchedYear := matchOne(&item, oldKey, resolved, idx, fb)
 		if newKey != "" {
 			matched = append(matched, MatchResult{
 				Title: item.Title, Year: item.Year,

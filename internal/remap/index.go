@@ -70,6 +70,33 @@ func titleKey(normalizedTitle string, mediaType MediaType) string {
 	return keyenc.Join(normalizedTitle, string(mediaType))
 }
 
+// Index is the Plex library lookup MatchStaleItems consumes: three maps over
+// one entry set, each keyed by a different match strategy. Grouping them in a
+// struct (rather than three positional map[string]PlexEntry parameters) makes
+// every assignment to a strategy NAMED: the old positional form let a swapped
+// pair compile invisibly, match on the wrong key, and report success. The
+// residual gap is honest to state: the fields share one map type, so a
+// composite literal that names the wrong field still compiles — but it now
+// says ByGUID: byTitleYear at the one construction site instead of hiding in
+// an argument list.
+type Index struct {
+	// ByGUID is keyed by the normalized global GUID. Deliberately NOT
+	// type-keyed (TMDB movies and TV series share the tmdb://<id> namespace),
+	// so matchOne guards media type at the lookup.
+	ByGUID map[string]PlexEntry
+	// ByTitleYear is keyed by titleYearKey (normalized title + year + media
+	// type), so a hit is same-type and same-year by construction.
+	ByTitleYear map[string]PlexEntry
+	// ByTitle is keyed by titleKey (normalized title + media type).
+	ByTitle map[string]PlexEntry
+}
+
+// Empty reports whether no strategy has any entry — the orchestrator's
+// "cannot match anything" abort signal.
+func (ix Index) Empty() bool {
+	return len(ix.ByGUID) == 0 && len(ix.ByTitleYear) == 0 && len(ix.ByTitle) == 0
+}
+
 // plexIndex accumulates the three lookup maps (by GUID, by title+year, and by
 // title) while library sections are scanned concurrently. Its mutex guards all
 // three maps so sections can be indexed in parallel. The three ambiguous sets
@@ -85,6 +112,13 @@ type plexIndex struct {
 	ambiguousTitleYear map[string]struct{}
 	ambiguousTitle     map[string]struct{}
 	mu                 sync.Mutex
+}
+
+// index snapshots the accumulator's three lookup maps into the exported
+// Index shape — the ONE place the field-to-strategy mapping is written, so a
+// transposition cannot creep in at a second construction site.
+func (idx *plexIndex) index() Index {
+	return Index{ByGUID: idx.byGUID, ByTitleYear: idx.byTitleYear, ByTitle: idx.byTitle}
 }
 
 func newPlexIndex() *plexIndex {
@@ -179,23 +213,18 @@ func (idx *plexIndex) scanSection(ctx context.Context, plex PlexLibraryFetcher, 
 	return nil
 }
 
-// BuildPlexIndex builds three lookup maps (by GUID, by title+year, by title)
-// from the Plex library sections. It fetches sections concurrently up to the
-// given parallelism limit. failedSections reports how many sections could not
-// be fetched (including a total failure to list sections); a non-zero count
-// means the index is incomplete, so the caller must treat Plex as degraded
-// rather than trusting a partial index.
-func BuildPlexIndex(ctx context.Context, plex PlexLibraryFetcher, parallelism int) (
-	byGUID map[string]PlexEntry,
-	byTitleYear map[string]PlexEntry,
-	byTitle map[string]PlexEntry,
-	failedSections int,
-) {
-	idx := newPlexIndex()
+// BuildPlexIndex builds the Index (GUID, title+year and title lookups) from
+// the Plex library sections. It fetches sections concurrently up to the given
+// parallelism limit. failedSections reports how many sections could not be
+// fetched (including a total failure to list sections); a non-zero count means
+// the index is incomplete, so the caller must treat Plex as degraded rather
+// than trusting a partial index.
+func BuildPlexIndex(ctx context.Context, plex PlexLibraryFetcher, parallelism int) (idx Index, failedSections int) {
+	acc := newPlexIndex()
 	sections, err := plex.LibrarySections(ctx)
 	if err != nil {
 		slog.Error("failed to list Plex library sections", "error", err)
-		return idx.byGUID, idx.byTitleYear, idx.byTitle, 1
+		return acc.index(), 1
 	}
 
 	var failed atomic.Int64
@@ -210,7 +239,7 @@ func BuildPlexIndex(ctx context.Context, plex PlexLibraryFetcher, parallelism in
 			continue
 		}
 		g.Go(func() error {
-			if scanErr := idx.scanSection(gctx, plex, sec); scanErr != nil {
+			if scanErr := acc.scanSection(gctx, plex, sec); scanErr != nil {
 				failed.Add(1)
 			}
 			return nil
@@ -224,22 +253,22 @@ func BuildPlexIndex(ctx context.Context, plex PlexLibraryFetcher, parallelism in
 	// cannot match on it. This is deterministic and order-independent, unlike
 	// the former last-writer-wins behavior (where the winning key depended on
 	// concurrent section scan ordering).
-	for k := range idx.ambiguousGUID {
-		delete(idx.byGUID, k)
+	for k := range acc.ambiguousGUID {
+		delete(acc.byGUID, k)
 	}
-	for k := range idx.ambiguousTitleYear {
-		delete(idx.byTitleYear, k)
+	for k := range acc.ambiguousTitleYear {
+		delete(acc.byTitleYear, k)
 	}
-	for k := range idx.ambiguousTitle {
-		delete(idx.byTitle, k)
+	for k := range acc.ambiguousTitle {
+		delete(acc.byTitle, k)
 	}
 
-	if refused := len(idx.ambiguousGUID) + len(idx.ambiguousTitleYear) + len(idx.ambiguousTitle); refused > 0 {
+	if refused := len(acc.ambiguousGUID) + len(acc.ambiguousTitleYear) + len(acc.ambiguousTitle); refused > 0 {
 		slog.Info("refused to match ambiguous index keys (multiple Plex items shared one lookup key)",
-			"guid", len(idx.ambiguousGUID),
-			"title_year", len(idx.ambiguousTitleYear),
-			"title", len(idx.ambiguousTitle))
+			"guid", len(acc.ambiguousGUID),
+			"title_year", len(acc.ambiguousTitleYear),
+			"title", len(acc.ambiguousTitle))
 	}
 
-	return idx.byGUID, idx.byTitleYear, idx.byTitle, int(failed.Load())
+	return acc.index(), int(failed.Load())
 }

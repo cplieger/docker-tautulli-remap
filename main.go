@@ -13,7 +13,7 @@ import (
 	"time"
 
 	"github.com/cplieger/health"
-	"github.com/cplieger/httpx/v4"
+	"github.com/cplieger/httpx/v5"
 	"github.com/cplieger/slogx"
 	appconfig "github.com/cplieger/tautulli-remap/internal/config"
 	"github.com/cplieger/tautulli-remap/internal/orchestrator"
@@ -53,7 +53,7 @@ func main() {
 		slog.Error("failed to load configuration", "error", err)
 		os.Exit(1)
 	}
-	appconfig.LogConfig(cfg)
+	cfg.Log()
 
 	orch, err := buildOrchestrator(cfg)
 	if err != nil {
@@ -95,7 +95,7 @@ func doTrigger() int {
 		slog.Error("failed to load configuration", "error", err)
 		return 1
 	}
-	appconfig.LogConfig(cfg)
+	cfg.Log()
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()

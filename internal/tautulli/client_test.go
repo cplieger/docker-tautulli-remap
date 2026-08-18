@@ -141,7 +141,16 @@ func TestAPI_ErrorDoesNotLeakAPIKey(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		hj, ok := w.(http.Hijacker)
 		if !ok {
-			t.Skip("server doesn't support hijacking")
+			// Unreachable: httptest's HTTP/1.1 ResponseWriter implements
+			// Hijacker (only HTTP/2, which httptest enables solely via TLS
+			// NextProtos, refuses it). This replaced a t.Skip, which runs
+			// SkipNow's runtime.Goexit on the SERVER goroutine — and a bare
+			// type assertion would be worse than either: net/http recovers
+			// handler panics and closes the conn, so the client still errors
+			// and the test would pass GREEN without anyone learning the
+			// assumption broke. t.Errorf is goroutine-safe and fails loudly.
+			t.Errorf("httptest ResponseWriter does not implement http.Hijacker")
+			return
 		}
 		conn, _, _ := hj.Hijack()
 		conn.Close()

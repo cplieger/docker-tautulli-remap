@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/cplieger/runesafe"
+	"github.com/cplieger/runesafe/v2"
 )
 
 func FuzzFlexIntUnmarshal(f *testing.F) {
@@ -183,7 +183,7 @@ func FuzzMatchOne(f *testing.F) {
 		}
 		validKeys := map[string]bool{"200": true, "300": true, "400": true, "500": true}
 
-		newKey, method, matchedYear := matchOne(item, "100", nil, byGUID, byTitleYear, byTitle, true, true)
+		newKey, method, matchedYear := matchOne(item, "100", nil, Index{ByGUID: byGUID, ByTitleYear: byTitleYear, ByTitle: byTitle}, Fallbacks{TitleYear: true, TitleOnly: true})
 
 		// A returned key is never invented: it must be one of the index entries.
 		if newKey != "" && !validKeys[newKey] {
