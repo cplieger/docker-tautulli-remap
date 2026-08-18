@@ -13,13 +13,13 @@ import (
 
 func TestLoad(t *testing.T) {
 	t.Setenv("TAUTULLI_URL", "http://localhost:8181")
-	t.Setenv("TAUTULLI_APIKEY", "test-key")
+	t.Setenv("TAUTULLI_API_KEY", "test-key")
 	t.Setenv("PLEX_URL", "http://localhost:32400")
 	t.Setenv("PLEX_TOKEN", "test-token")
 	t.Setenv("DRY_RUN", "false")
 	t.Setenv("FALLBACK_TITLE_YEAR", "true")
 	t.Setenv("FALLBACK_TITLE_ONLY", "true")
-	t.Setenv("SCHEDULE_INTERVAL", "12h")
+	t.Setenv("REMAP_INTERVAL", "12h")
 
 	cfg, err := Load()
 	if err != nil {
@@ -37,8 +37,8 @@ func TestLoad(t *testing.T) {
 	if !cfg.FallbackTitleOnly {
 		t.Error("FallbackTitleOnly should be true")
 	}
-	if cfg.ScheduleInterval != 12*time.Hour {
-		t.Errorf("ScheduleInterval = %v, want 12h", cfg.ScheduleInterval)
+	if cfg.RemapInterval != 12*time.Hour {
+		t.Errorf("RemapInterval = %v, want 12h", cfg.RemapInterval)
 	}
 	if cfg.TautulliAPIKey != "test-key" {
 		t.Errorf("TautulliAPIKey = %q, want %q", cfg.TautulliAPIKey, "test-key")
@@ -52,10 +52,10 @@ func TestLoad(t *testing.T) {
 }
 
 func TestLoadDefaults(t *testing.T) {
-	t.Setenv("TAUTULLI_APIKEY", "key")
+	t.Setenv("TAUTULLI_API_KEY", "key")
 	t.Setenv("PLEX_TOKEN", "token")
 	t.Setenv("DRY_RUN", "")
-	t.Setenv("SCHEDULE_INTERVAL", "")
+	t.Setenv("REMAP_INTERVAL", "")
 	t.Setenv("FALLBACK_TITLE_YEAR", "")
 	t.Setenv("FALLBACK_TITLE_ONLY", "")
 	t.Setenv("TAUTULLI_URL", "")
@@ -89,12 +89,12 @@ func TestLoad_MissingRequiredEnv(t *testing.T) {
 		plexToken string
 		wantKey   envx.Key
 	}{
-		{"missing api key", "", "token", "TAUTULLI_APIKEY"},
+		{"missing api key", "", "token", "TAUTULLI_API_KEY"},
 		{"missing plex token", "key", "", "PLEX_TOKEN"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			t.Setenv("TAUTULLI_APIKEY", tt.apiKey)
+			t.Setenv("TAUTULLI_API_KEY", tt.apiKey)
 			t.Setenv("PLEX_TOKEN", tt.plexToken)
 
 			_, err := Load()
@@ -113,22 +113,22 @@ func TestLoad_MissingRequiredEnv(t *testing.T) {
 	}
 }
 
-func TestLoadInvalidScheduleInterval(t *testing.T) {
-	t.Setenv("TAUTULLI_APIKEY", "key")
+func TestLoadInvalidRemapInterval(t *testing.T) {
+	t.Setenv("TAUTULLI_API_KEY", "key")
 	t.Setenv("PLEX_TOKEN", "token")
-	t.Setenv("SCHEDULE_INTERVAL", "notaduration")
+	t.Setenv("REMAP_INTERVAL", "notaduration")
 
 	cfg, err := Load()
 	if err != nil {
 		t.Fatalf("Load() error: %v", err)
 	}
-	if cfg.ScheduleInterval != 0 {
-		t.Errorf("ScheduleInterval = %v, want 0", cfg.ScheduleInterval)
+	if cfg.RemapInterval != 0 {
+		t.Errorf("RemapInterval = %v, want 0", cfg.RemapInterval)
 	}
 }
 
 // captureLogs redirects the default slog logger into a buffer for the duration
-// of the test, restoring the previous default on cleanup. parseScheduleInterval
+// of the test, restoring the previous default on cleanup. parseRemapInterval
 // emits its warnings through the package default logger, so this lets a test
 // assert on those side-effects. The returned closure yields the buffer's
 // current contents.
@@ -141,13 +141,13 @@ func captureLogs(t *testing.T) func() string {
 	return buf.String
 }
 
-// TestParseScheduleInterval covers the values parseScheduleInterval accepts
+// TestParseRemapInterval covers the values parseRemapInterval accepts
 // silently: the sentinels that select resident-idle mode (0), parseable
 // positive durations that pass through unchanged, and parseable zero-valued
-// durations. None of these may emit a SCHEDULE_INTERVAL warning. Asserting the
+// durations. None of these may emit a REMAP_INTERVAL warning. Asserting the
 // absence of a warning is what pins the sentinel switch: drop "off" from it and
 // "off" falls through to time.ParseDuration, which fails and warns.
-func TestParseScheduleInterval(t *testing.T) {
+func TestParseRemapInterval(t *testing.T) {
 	tests := []struct {
 		name string
 		raw  string
@@ -170,53 +170,53 @@ func TestParseScheduleInterval(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			getLogs := captureLogs(t)
-			got := parseScheduleInterval(tt.raw)
+			got := parseRemapInterval(tt.raw)
 			if got != tt.want {
-				t.Errorf("parseScheduleInterval(%q) = %v, want %v", tt.raw, got, tt.want)
+				t.Errorf("parseRemapInterval(%q) = %v, want %v", tt.raw, got, tt.want)
 			}
-			if logs := getLogs(); strings.Contains(logs, "SCHEDULE_INTERVAL") {
-				t.Errorf("parseScheduleInterval(%q) emitted an unexpected warning: %q", tt.raw, logs)
+			if logs := getLogs(); strings.Contains(logs, "REMAP_INTERVAL") {
+				t.Errorf("parseRemapInterval(%q) emitted an unexpected warning: %q", tt.raw, logs)
 			}
 		})
 	}
 }
 
-// TestParseScheduleInterval_rejectsInvalid covers the values parseScheduleInterval
+// TestParseRemapInterval_rejectsInvalid covers the values parseRemapInterval
 // rejects: unparseable input and negative durations both default to off (0) and
 // must warn. The negative case is the boundary partner of the silent "0h" case
 // above: it pins `d < 0` against a `d <= 0` mutation, which would wrongly warn
 // on and reject a zero-valued duration. The specific warning phrase
 // distinguishes the two rejection reasons.
-func TestParseScheduleInterval_rejectsInvalid(t *testing.T) {
+func TestParseRemapInterval_rejectsInvalid(t *testing.T) {
 	tests := []struct {
 		name        string
 		raw         string
 		wantWarning string
 	}{
-		{"unparseable value", "notaduration", "invalid SCHEDULE_INTERVAL"},
-		{"garbage with digits", "12parsecs", "invalid SCHEDULE_INTERVAL"},
-		{"negative hours", "-5h", "negative SCHEDULE_INTERVAL"},
-		{"negative compound", "-1h30m", "negative SCHEDULE_INTERVAL"},
+		{"unparseable value", "notaduration", "invalid REMAP_INTERVAL"},
+		{"garbage with digits", "12parsecs", "invalid REMAP_INTERVAL"},
+		{"negative hours", "-5h", "negative REMAP_INTERVAL"},
+		{"negative compound", "-1h30m", "negative REMAP_INTERVAL"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			getLogs := captureLogs(t)
-			got := parseScheduleInterval(tt.raw)
+			got := parseRemapInterval(tt.raw)
 			if got != 0 {
-				t.Errorf("parseScheduleInterval(%q) = %v, want 0 (off)", tt.raw, got)
+				t.Errorf("parseRemapInterval(%q) = %v, want 0 (off)", tt.raw, got)
 			}
 			if logs := getLogs(); !strings.Contains(logs, tt.wantWarning) {
-				t.Errorf("parseScheduleInterval(%q) missing %q warning; logs=%q", tt.raw, tt.wantWarning, logs)
+				t.Errorf("parseRemapInterval(%q) missing %q warning; logs=%q", tt.raw, tt.wantWarning, logs)
 			}
 		})
 	}
 }
 
-// TestLog_LogsScheduleMode pins the schedule-mode label Log emits:
+// TestLog_LogsRemapIntervalMode pins the interval-mode label Log emits:
 // the "resident-idle" sentinel when the interval is zero, and the duration's
-// String() form when scheduled. It guards the cfg.ScheduleInterval > 0 branch
+// String() form when scheduled. It guards the cfg.RemapInterval > 0 branch
 // (a >= 0 mutation would log "0s" instead of "resident-idle").
-func TestLog_LogsScheduleMode(t *testing.T) {
+func TestLog_LogsRemapIntervalMode(t *testing.T) {
 	tests := []struct {
 		name     string
 		interval time.Duration
@@ -228,30 +228,30 @@ func TestLog_LogsScheduleMode(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			getLogs := captureLogs(t)
-			(&Config{ScheduleInterval: tt.interval}).Log()
-			if logs := getLogs(); !strings.Contains(logs, "schedule_interval="+tt.wantMode) {
-				t.Errorf("Log logged %q, want schedule_interval=%q", logs, tt.wantMode)
+			(&Config{RemapInterval: tt.interval}).Log()
+			if logs := getLogs(); !strings.Contains(logs, "remap_interval="+tt.wantMode) {
+				t.Errorf("Log logged %q, want remap_interval=%q", logs, tt.wantMode)
 			}
 		})
 	}
 }
 
 // TestLog_neverLogsSecrets pins the documented "API tokens are never
-// logged" contract: Log emits URLs, dry-run, fallbacks, and the schedule
-// mode, but must never place the Tautulli API key or Plex token into a log
+// logged" contract: Log emits URLs, dry-run, fallbacks, and the remap
+// interval, but must never place the Tautulli API key or Plex token into a log
 // attribute.
 func TestLog_neverLogsSecrets(t *testing.T) {
 	const (
-		apiKey = "SECRET-TAUTULLI-APIKEY-sentinel"
+		apiKey = "SECRET-TAUTULLI-API-KEY-sentinel"
 		token  = "SECRET-PLEX-TOKEN-sentinel"
 	)
 	getLogs := captureLogs(t)
 	(&Config{
-		TautulliURL:      "http://tautulli:8181",
-		TautulliAPIKey:   apiKey,
-		PlexURL:          "http://plex:32400",
-		PlexToken:        token,
-		ScheduleInterval: 24 * time.Hour,
+		TautulliURL:    "http://tautulli:8181",
+		TautulliAPIKey: apiKey,
+		PlexURL:        "http://plex:32400",
+		PlexToken:      token,
+		RemapInterval:  24 * time.Hour,
 	}).Log()
 	logs := getLogs()
 	if strings.Contains(logs, apiKey) {
@@ -269,7 +269,7 @@ func TestLog_logsConfigAttributes(t *testing.T) {
 		DryRun:            false,
 		FallbackTitleYear: true,
 		FallbackTitleOnly: true,
-		ScheduleInterval:  24 * time.Hour,
+		RemapInterval:     24 * time.Hour,
 	}
 	dry := Config{
 		TautulliURL:       "http://localhost:8181",
@@ -306,29 +306,29 @@ func TestLog_logsConfigAttributes(t *testing.T) {
 	}
 }
 
-// TestLoad_scheduleIntervalDefaultsToResidentIdle pins the getEnv("SCHEDULE_INTERVAL", "off")
+// TestLoad_remapIntervalDefaultsToResidentIdle pins the getEnv("REMAP_INTERVAL", "off")
 // fallback: with the env var unset, Load must default to resident-idle mode
-// (ScheduleInterval == 0), not scheduled mode. TestLoadDefaults asserts every
+// (RemapInterval == 0), not scheduled mode. TestLoadDefaults asserts every
 // other default but omits this one, leaving a mutation of the "off" fallback to
 // any parseable duration undetected.
-func TestLoad_scheduleIntervalDefaultsToResidentIdle(t *testing.T) {
-	t.Setenv("TAUTULLI_APIKEY", "key")
+func TestLoad_remapIntervalDefaultsToResidentIdle(t *testing.T) {
+	t.Setenv("TAUTULLI_API_KEY", "key")
 	t.Setenv("PLEX_TOKEN", "token")
-	t.Setenv("SCHEDULE_INTERVAL", "")
+	t.Setenv("REMAP_INTERVAL", "")
 
 	cfg, err := Load()
 	if err != nil {
 		t.Fatalf("Load() error: %v", err)
 	}
-	if cfg.ScheduleInterval != 0 {
-		t.Errorf("ScheduleInterval = %v, want 0 (resident-idle default)", cfg.ScheduleInterval)
+	if cfg.RemapInterval != 0 {
+		t.Errorf("RemapInterval = %v, want 0 (resident-idle default)", cfg.RemapInterval)
 	}
 }
 
 // TestLoad_whitespaceOnlySecretWarnsButProceeds pins the branch that separates a
 // missing required secret (empty value -> MissingEnvError) from a present-but-blank
 // one (whitespace-only -> loaded verbatim, with a warning). A whitespace-only
-// TAUTULLI_APIKEY or PLEX_TOKEN must NOT fail Load; Load returns the value
+// TAUTULLI_API_KEY or PLEX_TOKEN must NOT fail Load; Load returns the value
 // unchanged and emits the "contains only whitespace" warning naming that key. A
 // non-blank secret must load without the warning. This guards each
 // strings.TrimSpace(x) == "" check against a negation mutation, which would warn
@@ -349,7 +349,7 @@ func TestLoad_whitespaceOnlySecretWarnsButProceeds(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			getLogs := captureLogs(t)
-			t.Setenv("TAUTULLI_APIKEY", tt.apiKey)
+			t.Setenv("TAUTULLI_API_KEY", tt.apiKey)
 			t.Setenv("PLEX_TOKEN", tt.token)
 
 			cfg, err := Load()
@@ -363,9 +363,9 @@ func TestLoad_whitespaceOnlySecretWarnsButProceeds(t *testing.T) {
 				t.Errorf("PlexToken = %q, want %q loaded verbatim", cfg.PlexToken, tt.token)
 			}
 			logs := getLogs()
-			gotAPIWarn := strings.Contains(logs, "only whitespace") && strings.Contains(logs, "key=TAUTULLI_APIKEY")
+			gotAPIWarn := strings.Contains(logs, "only whitespace") && strings.Contains(logs, "key=TAUTULLI_API_KEY")
 			if gotAPIWarn != tt.wantAPIWarn {
-				t.Errorf("TAUTULLI_APIKEY whitespace warning = %v, want %v; logs=%q", gotAPIWarn, tt.wantAPIWarn, logs)
+				t.Errorf("TAUTULLI_API_KEY whitespace warning = %v, want %v; logs=%q", gotAPIWarn, tt.wantAPIWarn, logs)
 			}
 			gotTokenWarn := strings.Contains(logs, "only whitespace") && strings.Contains(logs, "key=PLEX_TOKEN")
 			if gotTokenWarn != tt.wantTokenWarn {

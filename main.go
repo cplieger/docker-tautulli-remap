@@ -39,7 +39,7 @@ func main() {
 			// (interval 0) disables the deadline (WithMaxAge(0) is a no-op):
 			// an idle resident between external triggers is healthy.
 			health.RunProbe(health.DefaultPath,
-				health.WithMaxAge(3*appconfig.ScheduleInterval()))
+				health.WithMaxAge(3*appconfig.RemapInterval()))
 		case "trigger":
 			runTrigger()
 		default:
@@ -68,7 +68,7 @@ func main() {
 	marker.Set(false)
 	defer marker.Cleanup()
 
-	if cfg.ScheduleInterval > 0 {
+	if cfg.RemapInterval > 0 {
 		orch.RunScheduler(ctx, marker.Set)
 		return
 	}
@@ -76,7 +76,7 @@ func main() {
 	// Resident-idle mode: no internal timer, wait for external triggers via
 	// "docker exec ... tautulli-remap trigger". Healthy while idle.
 	marker.Set(true)
-	slog.Info("resident-idle mode", "reason", "SCHEDULE_INTERVAL=off, awaiting external trigger")
+	slog.Info("resident-idle mode", "reason", "REMAP_INTERVAL=off, awaiting external trigger")
 	<-ctx.Done()
 	slog.Info("shutting down", "mode", "resident-idle", "cause", context.Cause(ctx))
 }

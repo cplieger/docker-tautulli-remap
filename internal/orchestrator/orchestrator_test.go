@@ -1285,7 +1285,7 @@ func TestRunScheduler_ShutdownInterruptedRunNotCountedAsFailure(t *testing.T) {
 		}
 	}
 
-	o := New(&fakePlex{}, &fakeTautulli{}, &config.Config{DryRun: true, ScheduleInterval: time.Hour})
+	o := New(&fakePlex{}, &fakeTautulli{}, &config.Config{DryRun: true, RemapInterval: time.Hour})
 	o.RunLockPath = filepath.Join(t.TempDir(), "remap.lock")
 	o.RunScheduler(ctx, setHealthy)
 
@@ -1392,7 +1392,7 @@ func TestRunScheduler_FlipsUnhealthyAfterConsecutiveFailures(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 	ft := &scriptedScheduler{failPlan: []bool{true, true, true}, cancel: cancel}
-	o := New(&fakePlex{}, ft, &config.Config{DryRun: true, ScheduleInterval: time.Millisecond})
+	o := New(&fakePlex{}, ft, &config.Config{DryRun: true, RemapInterval: time.Millisecond})
 	o.RunLockPath = filepath.Join(t.TempDir(), "remap.lock")
 
 	trueCount, falseCount := 0, 0
@@ -1431,7 +1431,7 @@ func TestRunScheduler_ResetsFailureCountOnSuccess(t *testing.T) {
 	// fail, fail, succeed (resets the counter to 0), fail: the counter never
 	// reaches the threshold of 3, so the marker must never flip unhealthy.
 	ft := &scriptedScheduler{failPlan: []bool{true, true, false, true}, cancel: cancel}
-	o := New(&fakePlex{}, ft, &config.Config{DryRun: true, ScheduleInterval: time.Millisecond})
+	o := New(&fakePlex{}, ft, &config.Config{DryRun: true, RemapInterval: time.Millisecond})
 	o.RunLockPath = filepath.Join(t.TempDir(), "remap.lock")
 
 	falseCount := 0
