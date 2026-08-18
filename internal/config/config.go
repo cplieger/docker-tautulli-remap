@@ -23,27 +23,27 @@ type Config struct {
 	TautulliAPIKey    string
 	PlexURL           string
 	PlexToken         string
-	ScheduleInterval  time.Duration // 0 = resident-idle (external trigger)
+	RemapInterval     time.Duration // 0 = resident-idle (external trigger)
 	MaxHistoryRecords int
 	DryRun            bool
 	FallbackTitleYear bool
 	FallbackTitleOnly bool
 }
 
-// ScheduleInterval returns the effective SCHEDULE_INTERVAL (0 =
+// RemapInterval returns the effective REMAP_INTERVAL (0 =
 // resident-idle), parsed with the same rules Load applies. Exported
 // separately so the health subcommand can derive its probe max-age
 // before (and without) a full config load, which would fail on missing
 // secrets the probe does not need.
-func ScheduleInterval() time.Duration {
-	return parseScheduleInterval(cmp.Or(envx.String("SCHEDULE_INTERVAL"), "off"))
+func RemapInterval() time.Duration {
+	return parseRemapInterval(cmp.Or(envx.String("REMAP_INTERVAL"), "off"))
 }
 
 // Load parses environment variables and returns the configuration.
 func Load() (*Config, error) {
-	interval := ScheduleInterval()
+	interval := RemapInterval()
 
-	apiKey, err := requireSecret("TAUTULLI_APIKEY")
+	apiKey, err := requireSecret("TAUTULLI_API_KEY")
 	if err != nil {
 		return nil, err
 	}
@@ -57,7 +57,7 @@ func Load() (*Config, error) {
 		TautulliAPIKey:    apiKey,
 		PlexURL:           cmp.Or(envx.String("PLEX_URL"), "http://plex:32400"),
 		PlexToken:         token,
-		ScheduleInterval:  interval,
+		RemapInterval:     interval,
 		MaxHistoryRecords: maxHistoryRecords(),
 		DryRun:            envx.Bool("DRY_RUN", true),
 		FallbackTitleYear: envx.Bool("FALLBACK_TITLE_YEAR", true),
@@ -78,10 +78,10 @@ func maxHistoryRecords() int {
 	return n
 }
 
-// parseScheduleInterval parses SCHEDULE_INTERVAL. Accepts a Go duration
+// parseRemapInterval parses REMAP_INTERVAL. Accepts a Go duration
 // (e.g. "24h", "6h30m") or the sentinels "off"/"disabled"/"0"/"0s" which
 // all map to 0 (resident-idle mode). Unparseable values warn and default to off.
-func parseScheduleInterval(raw string) time.Duration {
+func parseRemapInterval(raw string) time.Duration {
 	trimmed := strings.TrimSpace(raw)
 	switch strings.ToLower(trimmed) {
 	case "", "off", "disabled", "0", "0s":
@@ -89,12 +89,12 @@ func parseScheduleInterval(raw string) time.Duration {
 	}
 	d, err := time.ParseDuration(trimmed)
 	if err != nil {
-		slog.Warn("invalid SCHEDULE_INTERVAL, defaulting to off (resident-idle)",
+		slog.Warn("invalid REMAP_INTERVAL, defaulting to off (resident-idle)",
 			"value", raw, "error", err)
 		return 0
 	}
 	if d < 0 {
-		slog.Warn("negative SCHEDULE_INTERVAL, defaulting to off", "value", raw)
+		slog.Warn("negative REMAP_INTERVAL, defaulting to off", "value", raw)
 		return 0
 	}
 	return d
@@ -106,8 +106,8 @@ func parseScheduleInterval(raw string) time.Duration {
 // log call. Do not add cfg.TautulliAPIKey or cfg.PlexToken here.
 func (cfg *Config) Log() {
 	mode := "resident-idle"
-	if cfg.ScheduleInterval > 0 {
-		mode = cfg.ScheduleInterval.String()
+	if cfg.RemapInterval > 0 {
+		mode = cfg.RemapInterval.String()
 	}
 	slog.Info("configuration loaded",
 		"tautulli_url", cfg.TautulliURL,
@@ -115,7 +115,7 @@ func (cfg *Config) Log() {
 		"dry_run", cfg.DryRun,
 		"fallback_title_year", cfg.FallbackTitleYear,
 		"fallback_title_only", cfg.FallbackTitleOnly,
-		"schedule_interval", mode,
+		"remap_interval", mode,
 		"max_history_records", cfg.MaxHistoryRecords,
 	)
 }

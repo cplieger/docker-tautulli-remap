@@ -24,7 +24,7 @@ For each stale entry, it finds the correct current rating key in Plex using a ch
 
 ### Why this design
 
-- **Three run modes**: `SCHEDULE_INTERVAL` set to a Go duration like `24h` for a built-in timer, `SCHEDULE_INTERVAL=off` for resident-idle (stays healthy, awaits `docker exec ... tautulli-remap trigger`), or `tautulli-remap trigger` for a one-shot pass that reports its outcome via its exit code.
+- **Three run modes**: `REMAP_INTERVAL` set to a Go duration like `24h` for a built-in timer, `REMAP_INTERVAL=off` for resident-idle (stays healthy, awaits `docker exec ... tautulli-remap trigger`), or `tautulli-remap trigger` for a one-shot pass that reports its outcome via its exit code.
 - **Dry-run by default for safety**: no changes are applied until you explicitly set `DRY_RUN=false`, so you can always preview first.
 - **Matching strategies with increasing aggressiveness**: starts with the exact ones (episode-GUID resolution for shows, GUID match for movies), falls back to title+year, and optionally title-only, giving you control over the risk/coverage tradeoff.
 - **Stdlib-first, minimal dependencies**: pure Go on the standard library plus a first-party shared-lib set (`health`, `httpx`, `plexapi`, `scheduler`, `envx`, `slogx`, `runesafe`) and `golang.org/x/sync`, minimizing supply-chain risk.
@@ -43,10 +43,10 @@ services:
 
     environment:
       TAUTULLI_URL: "http://tautulli:8181"
-      TAUTULLI_APIKEY: "your-tautulli-apikey"  # required
+      TAUTULLI_API_KEY: "your-tautulli-api-key"  # required
       PLEX_URL: "http://plex:32400"
       PLEX_TOKEN: "your-plex-token"  # required
-      SCHEDULE_INTERVAL: "24h"  # Go duration; "off" = resident-idle
+      REMAP_INTERVAL: "24h"  # Go duration; "off" = resident-idle
       DRY_RUN: "true"  # set to false to apply changes
 ```
 
@@ -55,10 +55,10 @@ services:
 | Variable | Description | Default | Required |
 | --- | --- | --- | --- |
 | `TAUTULLI_URL` | Tautulli instance URL (Docker DNS name or LAN IP) | `http://tautulli:8181` | No |
-| `TAUTULLI_APIKEY` | Tautulli API key (Settings → Web Interface → API Key) | - | Yes |
+| `TAUTULLI_API_KEY` | Tautulli API key (Settings → Web Interface → API Key) | - | Yes |
 | `PLEX_URL` | Plex Media Server URL (Docker DNS name or LAN IP) | `http://plex:32400` | No |
 | `PLEX_TOKEN` | Plex authentication token (see Plex support article) | - | Yes |
-| `SCHEDULE_INTERVAL` | Go duration between remap runs (e.g. `24h`, `6h30m`). `off`/`disabled`/`0` = resident-idle (awaits external trigger via `tautulli-remap trigger`) | `off` | No |
+| `REMAP_INTERVAL` | Go duration between remap runs (e.g. `24h`, `6h30m`). `off`/`disabled`/`0` = resident-idle (awaits external trigger via `tautulli-remap trigger`) | `off` | No |
 | `FALLBACK_TITLE_YEAR` | Try title+year matching when GUID match fails | `true` | No |
 | `FALLBACK_TITLE_ONLY` | Try title-only matching as last resort (risk of false matches) | `false` | No |
 | `DRY_RUN` | Log what would change without applying; set to `false` to apply | `true` | No |
@@ -84,14 +84,14 @@ pass finishes.
 
 ### Recommended deployment with external scheduling
 
-Use `SCHEDULE_INTERVAL=off` (resident-idle, one of the three [run modes](#why-this-design)) with an external scheduler like Ofelia:
+Use `REMAP_INTERVAL=off` (resident-idle, one of the three [run modes](#why-this-design)) with an external scheduler like Ofelia:
 
 ```yaml
 services:
   tautulli-remap:
     image: ghcr.io/cplieger/tautulli-remap:latest
     environment:
-      SCHEDULE_INTERVAL: "off"  # resident-idle, awaits trigger
+      REMAP_INTERVAL: "off"  # resident-idle, awaits trigger
       DRY_RUN: "false"
       # ... other env vars
     labels:
@@ -106,8 +106,8 @@ This keeps the container healthy (passing healthchecks) while delegating schedul
 
 The container includes a built-in Docker healthcheck via the `/tautulli-remap health` subcommand, which checks for a marker file at `/tmp/.healthy`. What that marker reflects depends on the run mode:
 
-- **Scheduled mode** (`SCHEDULE_INTERVAL` set to a duration): the main process refreshes `/tmp/.healthy` after each run and marks the container unhealthy after 3 consecutive failed runs (Tautulli or Plex APIs unreachable, returning errors, or the remap logic failing), recovering automatically on the next successful run (including runs where nothing needs remapping).
-- **Resident-idle mode** (`SCHEDULE_INTERVAL=off`): the marker reflects the resident process's liveness. Each `tautulli-remap trigger` run reports its own outcome via its exit code (0 success / 1 failure / 3 interrupted by shutdown before completing) for the external scheduler to act on; a failed trigger deliberately does **not** mark the long-lived container unhealthy.
+- **Scheduled mode** (`REMAP_INTERVAL` set to a duration): the main process refreshes `/tmp/.healthy` after each run and marks the container unhealthy after 3 consecutive failed runs (Tautulli or Plex APIs unreachable, returning errors, or the remap logic failing), recovering automatically on the next successful run (including runs where nothing needs remapping).
+- **Resident-idle mode** (`REMAP_INTERVAL=off`): the marker reflects the resident process's liveness. Each `tautulli-remap trigger` run reports its own outcome via its exit code (0 success / 1 failure / 3 interrupted by shutdown before completing) for the external scheduler to act on; a failed trigger deliberately does **not** mark the long-lived container unhealthy.
 
 ## Security
 

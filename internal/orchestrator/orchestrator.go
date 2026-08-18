@@ -324,7 +324,7 @@ func (o *Orchestrator) buildIndex(ctx context.Context) (remap.Index, bool) {
 // RunScheduler implements the long-running scheduled mode. The setHealthy
 // callback controls the health marker.
 func (o *Orchestrator) RunScheduler(ctx context.Context, setHealthy func(bool)) {
-	interval := o.cfg.ScheduleInterval
+	interval := o.cfg.RemapInterval
 	slog.Info("scheduled mode", "interval", interval)
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()

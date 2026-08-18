@@ -7,8 +7,8 @@ services:
 
     environment:
       TAUTULLI_URL: "http://tautulli:8181"
-      TAUTULLI_APIKEY: "your-tautulli-apikey"  # required
+      TAUTULLI_API_KEY: "your-tautulli-api-key"  # required
       PLEX_URL: "http://plex:32400"
       PLEX_TOKEN: "your-plex-token"  # required
-      SCHEDULE_INTERVAL: "24h"  # Go duration; "off" = resident-idle
+      REMAP_INTERVAL: "24h"  # Go duration; "off" = resident-idle
       DRY_RUN: "true"  # set to false to apply changes

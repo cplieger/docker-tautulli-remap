@@ -8,9 +8,9 @@ the architecture and local workflow a contributor needs to land a change.
 
 A stdlib-first Go service that repairs Tautulli watch history after a Plex
 library reorganization assigns new internal rating keys. It has three run
-modes: scheduled (`SCHEDULE_INTERVAL` set to a Go duration like `24h`),
-resident-idle (`SCHEDULE_INTERVAL=off`,
-stays healthy and awaits `tautulli-remap trigger`), or one-shot
+modes: scheduled (`REMAP_INTERVAL` set to a Go duration like `24h`),
+resident-idle (`REMAP_INTERVAL=off`, stays healthy and awaits
+`tautulli-remap trigger`), or one-shot
 (`tautulli-remap trigger`, exits 0 on success, 1 on failure, 3 when
 interrupted). It has no inbound listener and ships
 as a distroless nonroot image. See `README.md` for the user-facing
@@ -25,7 +25,7 @@ The `health` subcommand (`tautulli-remap health`) and `trigger` subcommand
 anything else. All real logic lives under `internal/`:
 
 - `internal/config`: environment parsing into a `Config` struct via the
-  shared `envx` library. Required vars (`TAUTULLI_APIKEY`, `PLEX_TOKEN`) go
+  shared `envx` library. Required vars (`TAUTULLI_API_KEY`, `PLEX_TOKEN`) go
   through `envx.Require` (unset or empty returns an `*envx.MissingError`);
   booleans go through `envx.Bool` (tolerant of `true/1/yes/on`).
 - `internal/orchestrator`: coordinates the run: collect Tautulli
