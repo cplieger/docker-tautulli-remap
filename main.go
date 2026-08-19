@@ -161,7 +161,7 @@ func finishTrigger(ctx context.Context, ok bool, setHealthy func(bool)) int {
 // transport; Tautulli keeps the app-built one (2-minute total budget,
 // refuse-all redirects so the API key never rides a hostile 3xx).
 func buildOrchestrator(cfg *appconfig.Config) (*orchestrator.Orchestrator, error) {
-	plexClient, err := plex.New(cfg.PlexURL, cfg.PlexToken)
+	plexClient, err := plex.New(cfg.PlexURL, plex.Token(cfg.PlexToken))
 	if err != nil {
 		return nil, err
 	}

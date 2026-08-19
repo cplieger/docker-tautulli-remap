@@ -22,10 +22,21 @@ type Client struct {
 	api *plexapi.Client
 }
 
+// Token is plexapi's Plex-token type, re-exported so a caller constructing a
+// client through this wrapper does not import plexapi for one conversion. An
+// alias, not a new type: it IS the library's type, and a second distinct one
+// would only add a second conversion without adding a second guarantee.
+type Token = plexapi.Token
+
 // New builds the client for the given server URL and token. The library
 // validates the URL and installs the hardened transport (refuse-all
 // redirects, header-borne token, retry with Retry-After honoring).
-func New(plexURL, token string) (*Client, error) {
+//
+// The token is plexapi.Token rather than a string, propagated rather than
+// converted here: this wrapper had the same adjacent-strings pair the library
+// just closed, so converting at the plexapi call would have left the
+// transposition possible one layer out.
+func New(plexURL string, token plexapi.Token) (*Client, error) {
 	api, err := plexapi.New(plexURL, token)
 	if err != nil {
 		return nil, fmt.Errorf("plex client: %w", err)
