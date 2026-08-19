@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"maps"
 	"net/http"
 	"net/url"
 	"time"
@@ -23,6 +22,13 @@ const resultSuccess = "success"
 
 // defaultRetryDelayUnit is the base delay multiplied by attempt number.
 const defaultRetryDelayUnit = 5 * time.Second
+
+// ClientTimeout is the total budget for one Tautulli HTTP request including
+// retries; main.go installs it on the http.Client it injects. It lives beside
+// defaultRetryDelayUnit rather than at the construction site because it has to
+// accommodate APIWithRetry's whole backoff schedule — a client timeout below
+// that schedule cuts the retry chain short and the attempt cap never applies.
+const ClientTimeout = 2 * time.Minute
 
 // Client is the concrete Tautulli API client.
 type Client struct {
@@ -74,9 +80,16 @@ func New(tautulliURL, apiKey string, httpClient *http.Client) *Client {
 // from APIWithRetry's logs and errors, and httpx.RedactSecret strips it from
 // bare-API transport errors. cmd and apikey are applied after extra is merged,
 // so a caller-supplied extra can never override the command or the credential.
+//
+// extra is deep-copied with Values.Clone rather than shallow-copied, so no
+// value slice is shared with the caller and a future params.Add cannot append
+// through into one. Clone returns nil for a nil extra (every no-param command
+// passes nil), so the map is materialized before Set writes to it.
 func (c *Client) requestURL(cmd string, extra url.Values) string {
-	params := url.Values{}
-	maps.Copy(params, extra)
+	params := extra.Clone()
+	if params == nil {
+		params = url.Values{}
+	}
 	params.Set("cmd", cmd)
 	params.Set("apikey", c.apiKey)
 	return c.url + "/api/v2?" + params.Encode()

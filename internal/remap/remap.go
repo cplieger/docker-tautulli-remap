@@ -21,9 +21,10 @@ func NormalizeGUID(guid string) string {
 		}
 		id := extractAfter(guid, m.Source)
 		if m.StripPath {
-			if i := strings.Index(id, "/"); i >= 0 {
-				id = id[:i]
-			}
+			// Cut returns the whole input as before on no match, so a
+			// show-level "thetvdb://<id>" with no season/episode path
+			// needs no separate branch.
+			id, _, _ = strings.Cut(id, "/")
 		}
 		if id == "" {
 			return ""
@@ -39,9 +40,9 @@ func extractAfter(s, prefix string) string {
 	if !found {
 		return ""
 	}
-	if i := strings.Index(after, "?"); i >= 0 {
-		after = after[:i]
-	}
+	// Cut returns the whole input as before on no match, so a GUID without a
+	// query string passes through unchanged.
+	after, _, _ = strings.Cut(after, "?")
 	return after
 }
 
