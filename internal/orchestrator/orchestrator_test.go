@@ -90,7 +90,7 @@ func testServer(t *testing.T, handler http.HandlerFunc) *config.Config {
 
 func newOrch(t *testing.T, cfg *config.Config) *Orchestrator {
 	t.Helper()
-	pc, perr := plex.New(cfg.PlexURL, cfg.PlexToken)
+	pc, perr := plex.New(cfg.PlexURL, plex.Token(cfg.PlexToken))
 	if perr != nil {
 		t.Fatalf("plex.New: %v", perr)
 	}
@@ -418,7 +418,7 @@ func TestBuildPlexIndex_AllThreeIndexes(t *testing.T) {
 			w.WriteHeader(http.StatusNotFound)
 		}
 	})
-	pc, perr := plex.New(cfg.PlexURL, cfg.PlexToken)
+	pc, perr := plex.New(cfg.PlexURL, plex.Token(cfg.PlexToken))
 	if perr != nil {
 		t.Fatalf("plex.New: %v", perr)
 	}
@@ -478,7 +478,7 @@ func TestBuildPlexIndex_SkipsNonMovieShowSections(t *testing.T) {
 			w.WriteHeader(http.StatusNotFound)
 		}
 	})
-	pc, perr := plex.New(cfg.PlexURL, cfg.PlexToken)
+	pc, perr := plex.New(cfg.PlexURL, plex.Token(cfg.PlexToken))
 	if perr != nil {
 		t.Fatalf("plex.New: %v", perr)
 	}
@@ -507,7 +507,7 @@ func TestBuildPlexIndex_CancelBetweenSections(t *testing.T) {
 			w.Write([]byte(`{"MediaContainer":{"Metadata":[]}}`))
 		}
 	})
-	pc, perr := plex.New(cfg.PlexURL, cfg.PlexToken)
+	pc, perr := plex.New(cfg.PlexURL, plex.Token(cfg.PlexToken))
 	if perr != nil {
 		t.Fatalf("plex.New: %v", perr)
 	}
