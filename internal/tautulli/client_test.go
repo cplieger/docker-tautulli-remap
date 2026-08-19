@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"strings"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/cplieger/tautulli-remap/internal/remap"
@@ -19,6 +20,22 @@ func newTestClient(url, apiKey string, httpClient *http.Client) *Client {
 	c := New(url, apiKey, httpClient)
 	c.RetryDelayUnit = time.Millisecond
 	return c
+}
+
+// newBubbleClient points a Client at an in-memory httptest server, for use
+// inside a synctest bubble. httptest.NewTestServer serves over a fake network
+// and registers its own shutdown with t.Cleanup, so there is no socket to dial
+// and no Close to defer; it leaves Server.URL unset and the client from
+// Server.Client() routes every request to the handler regardless of host,
+// which is why the base URL is a reserved-TLD placeholder.
+//
+// RetryDelayUnit is deliberately NOT overridden here: the bubble's synthetic
+// clock makes the production backoff cost nothing, so the retry-schedule tests
+// exercise the real 5-second base delay instead of a 1ms stand-in.
+func newBubbleClient(t *testing.T, handler http.HandlerFunc) *Client {
+	t.Helper()
+	srv := httptest.NewTestServer(t, handler)
+	return New("http://tautulli.invalid", "k", srv.Client())
 }
 
 func TestAPI_Success(t *testing.T) {
@@ -188,74 +205,89 @@ func TestAPIWithRetry_SucceedsOnFirst(t *testing.T) {
 	}
 }
 
+// TestAPIWithRetry_RetriesOnServerError runs in a synctest bubble so the
+// production backoff (RetryDelayUnit unmodified) is paid in synthetic time.
 func TestAPIWithRetry_RetriesOnServerError(t *testing.T) {
-	attempts := 0
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		attempts++
-		if attempts < 3 {
-			w.WriteHeader(http.StatusInternalServerError)
-			return
-		}
-		w.Write([]byte(`ok`))
-	}))
-	defer srv.Close()
+	synctest.Test(t, func(t *testing.T) {
+		attempts := 0
+		c := newBubbleClient(t, func(w http.ResponseWriter, _ *http.Request) {
+			attempts++
+			if attempts < 3 {
+				w.WriteHeader(http.StatusInternalServerError)
+				return
+			}
+			w.Write([]byte(`ok`))
+		})
 
-	c := newTestClient(srv.URL, "k", srv.Client())
-	body, err := c.APIWithRetry(t.Context(), "test", nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if string(body) != "ok" {
-		t.Errorf("unexpected body: %s", body)
-	}
-	if attempts != 3 {
-		t.Errorf("expected 3 attempts, got %d", attempts)
-	}
+		body, err := c.APIWithRetry(t.Context(), "test", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if string(body) != "ok" {
+			t.Errorf("unexpected body: %s", body)
+		}
+		if attempts != 3 {
+			t.Errorf("expected 3 attempts, got %d", attempts)
+		}
+	})
 }
 
+// TestAPIWithRetry_Exact3Attempts pins the attempt cap and, because the
+// synctest bubble runs the PRODUCTION backoff in synthetic time, also pins the
+// invariant that used to be untestable: an exhausted retry chain at the real
+// 5-second base delay still fits inside ClientTimeout, the budget main.go
+// installs on the injected client. Under the old 1ms delay override that
+// assertion was vacuous.
 func TestAPIWithRetry_Exact3Attempts(t *testing.T) {
-	calls := 0
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		calls++
-		w.WriteHeader(http.StatusInternalServerError)
-	}))
-	defer srv.Close()
+	synctest.Test(t, func(t *testing.T) {
+		calls := 0
+		c := newBubbleClient(t, func(w http.ResponseWriter, _ *http.Request) {
+			calls++
+			w.WriteHeader(http.StatusInternalServerError)
+		})
 
-	c := newTestClient(srv.URL, "k", srv.Client())
-	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
-	defer cancel()
-	_, err := c.APIWithRetry(ctx, "test_cmd", nil)
-	if err == nil {
-		t.Error("expected error from all-failing retries")
-	}
-	if calls != 3 {
-		t.Errorf("calls = %d, want 3", calls)
-	}
+		start := time.Now()
+		_, err := c.APIWithRetry(t.Context(), "test_cmd", nil)
+		elapsed := time.Since(start)
+		if err == nil {
+			t.Error("expected error from all-failing retries")
+		}
+		if calls != 3 {
+			t.Errorf("calls = %d, want 3", calls)
+		}
+		// Bound only: httpx jitters each delay, so the exact figure varies.
+		if elapsed >= ClientTimeout {
+			t.Errorf("production retry schedule took %v, which does not fit inside the %v client timeout",
+				elapsed, ClientTimeout)
+		}
+	})
 }
 
+// TestAPIWithRetry_SuccessOnSecondAttempt runs in a synctest bubble so the one
+// production backoff between the two attempts is paid in synthetic time.
 func TestAPIWithRetry_SuccessOnSecondAttempt(t *testing.T) {
-	calls := 0
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		calls++
-		if calls == 1 {
-			w.WriteHeader(http.StatusInternalServerError)
-			return
-		}
-		w.Write([]byte(`{"response":{"result":"success"}}`))
-	}))
-	defer srv.Close()
+	synctest.Test(t, func(t *testing.T) {
+		calls := 0
+		c := newBubbleClient(t, func(w http.ResponseWriter, _ *http.Request) {
+			calls++
+			if calls == 1 {
+				w.WriteHeader(http.StatusInternalServerError)
+				return
+			}
+			w.Write([]byte(`{"response":{"result":"success"}}`))
+		})
 
-	c := newTestClient(srv.URL, "k", srv.Client())
-	body, err := c.APIWithRetry(t.Context(), "test_cmd", nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if body == nil {
-		t.Error("expected non-nil body")
-	}
-	if calls != 2 {
-		t.Errorf("calls = %d, want 2", calls)
-	}
+		body, err := c.APIWithRetry(t.Context(), "test_cmd", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if body == nil {
+			t.Error("expected non-nil body")
+		}
+		if calls != 2 {
+			t.Errorf("calls = %d, want 2", calls)
+		}
+	})
 }
 
 func TestAPIWithRetry_CancelledContextStopsRetries(t *testing.T) {

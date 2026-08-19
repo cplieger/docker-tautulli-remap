@@ -10,7 +10,6 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
-	"time"
 
 	"github.com/cplieger/health"
 	"github.com/cplieger/httpx/v5"
@@ -166,7 +165,7 @@ func buildOrchestrator(cfg *appconfig.Config) (*orchestrator.Orchestrator, error
 		return nil, err
 	}
 	httpClient := &http.Client{
-		Timeout:       2 * time.Minute,
+		Timeout:       tautulli.ClientTimeout,
 		CheckRedirect: httpx.RefuseAllRedirects,
 	}
 	tautulliClient := tautulli.New(cfg.TautulliURL, cfg.TautulliAPIKey, httpClient)
