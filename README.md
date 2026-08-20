@@ -55,9 +55,11 @@ services:
 | Variable | Description | Default | Required |
 | --- | --- | --- | --- |
 | `TAUTULLI_URL` | Tautulli instance URL (Docker DNS name or LAN IP) | `http://tautulli:8181` | No |
-| `TAUTULLI_API_KEY` | Tautulli API key (Settings → Web Interface → API Key) | - | Yes |
+| `TAUTULLI_API_KEY` | Tautulli API key (Settings → Web Interface → API Key). Also readable from a file: see `TAUTULLI_API_KEY_FILE` below | - | Yes |
 | `PLEX_URL` | Plex Media Server URL (Docker DNS name or LAN IP) | `http://plex:32400` | No |
-| `PLEX_TOKEN` | Plex authentication token (see Plex support article) | - | Yes |
+| `PLEX_TOKEN` | Plex authentication token (see Plex support article). Also readable from a file: see `PLEX_TOKEN_FILE` below | - | Yes |
+| `TAUTULLI_API_KEY_FILE` | Path to a file holding the Tautulli API key (a Docker or Podman secret). When set it takes precedence over `TAUTULLI_API_KEY` and keeps the key out of the container environment, so it does not appear in `docker inspect`. One trailing line ending is stripped; a file holding only whitespace is rejected at startup | _(unset)_ | No |
+| `PLEX_TOKEN_FILE` | Path to a file holding the Plex token, on the same terms as `TAUTULLI_API_KEY_FILE` | _(unset)_ | No |
 | `REMAP_INTERVAL` | Go duration between remap runs (for example `24h`, `6h30m`). `off`/`disabled`/`0` = resident-idle (awaits external trigger via `tautulli-remap trigger`) | `off` | No |
 | `FALLBACK_TITLE_YEAR` | Try title+year matching when GUID match fails | `true` | No |
 | `FALLBACK_TITLE_ONLY` | Try title-only matching as last resort (risk of false matches) | `false` | No |
