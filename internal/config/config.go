@@ -120,13 +120,16 @@ func (cfg *Config) Log() {
 	)
 }
 
-// requireSecret reads a required secret env var via envx.Require (unset or
-// empty yields *envx.MissingError), adding the app's whitespace-only
-// warning: such a value fails upstream authentication, so it is worth
-// flagging while still returning it. The secret value itself is never
+// requireSecret reads a required secret env var via envx.Secret, so the value
+// may arrive either in the variable itself or in the file named by its
+// KEY_FILE companion (the Docker/Podman secret convention), which keeps it out
+// of the container environment and so out of docker inspect. KEY_FILE wins when
+// set. A missing secret yields *envx.MissingError. It adds the app's
+// whitespace-only warning: such a value fails upstream authentication, so it is
+// worth flagging while still returning it. The secret value itself is never
 // logged.
 func requireSecret(key envx.Key) (string, error) {
-	v, err := envx.Require(key)
+	v, err := envx.Secret(key)
 	if err != nil {
 		return "", err
 	}
