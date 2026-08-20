@@ -18,7 +18,7 @@ When you reorganize your Plex libraries (move files, re-add content, change fold
 For each stale entry, it finds the correct current rating key in Plex using a chain of strategies, most precise first:
 
 1. **Episode-GUID resolution** (TV shows): resolves a show through one of its watched episodes' stable Plex GUIDs, which map directly to the show's current key. Exact and collision-free, and it restores the show's full watch history (all seasons and episodes).
-2. **GUID match**: Plex's globally unique identifier; covers movies and shows whose history still carries a show-level GUID (e.g. the legacy `thetvdb` agent).
+2. **GUID match**: Plex's globally unique identifier; covers movies and shows whose history still carries a show-level GUID, for example from the legacy `thetvdb` agent.
 3. **Title+year match** (fallback): matches by title and release year when no GUID resolves.
 4. **Title-only with media type guard** (optional): last resort matching by title alone, restricted to the same media type to reduce false positives.
 
@@ -27,7 +27,7 @@ For each stale entry, it finds the correct current rating key in Plex using a ch
 - **Three run modes**: `REMAP_INTERVAL` set to a Go duration like `24h` for a built-in timer, `REMAP_INTERVAL=off` for resident-idle (stays healthy, awaits `docker exec ... tautulli-remap trigger`), or `tautulli-remap trigger` for a one-shot pass that reports its outcome via its exit code.
 - **Dry-run by default for safety**: no changes are applied until you explicitly set `DRY_RUN=false`, so you can always preview first.
 - **Matching strategies with increasing aggressiveness**: starts with the exact ones (episode-GUID resolution for shows, GUID match for movies), falls back to title+year, and optionally title-only, giving you control over the risk/coverage tradeoff.
-- **Stdlib-first, minimal dependencies**: pure Go on the standard library plus a first-party shared-lib set (`health`, `httpx`, `plexapi`, `scheduler`, `envx`, `slogx`, `runesafe`) and `golang.org/x/sync`, minimizing supply-chain risk.
+- **Stdlib-first, minimal dependencies**: pure Go on the standard library plus a first-party shared-lib set (`health`, `httpx`, `plexapi`, `scheduler`, `envx`, `slogx`, `runesafe`, `keyenc`) and `golang.org/x/sync`, minimizing supply-chain risk.
 - **Distroless and rootless**: runs as `nonroot` on `gcr.io/distroless/static-debian13` with no shell or package manager.
 
 ## Quick start
@@ -58,7 +58,7 @@ services:
 | `TAUTULLI_API_KEY` | Tautulli API key (Settings → Web Interface → API Key) | - | Yes |
 | `PLEX_URL` | Plex Media Server URL (Docker DNS name or LAN IP) | `http://plex:32400` | No |
 | `PLEX_TOKEN` | Plex authentication token (see Plex support article) | - | Yes |
-| `REMAP_INTERVAL` | Go duration between remap runs (e.g. `24h`, `6h30m`). `off`/`disabled`/`0` = resident-idle (awaits external trigger via `tautulli-remap trigger`) | `off` | No |
+| `REMAP_INTERVAL` | Go duration between remap runs (for example `24h`, `6h30m`). `off`/`disabled`/`0` = resident-idle (awaits external trigger via `tautulli-remap trigger`) | `off` | No |
 | `FALLBACK_TITLE_YEAR` | Try title+year matching when GUID match fails | `true` | No |
 | `FALLBACK_TITLE_ONLY` | Try title-only matching as last resort (risk of false matches) | `false` | No |
 | `DRY_RUN` | Log what would change without applying; set to `false` to apply | `true` | No |
@@ -79,8 +79,8 @@ concurrent passes. A pass that finds another one already running refuses
 immediately, before contacting Tautulli or Plex, and reports failure (a
 trigger exits 1; a scheduled pass counts it toward the unhealthy threshold),
 so a wedged pass surfaces through your scheduler's alerting instead of being
-silently skipped. Since passes are idempotent, simply re-run once the active
-pass finishes.
+silently skipped. Since passes are idempotent, re-run once the active pass
+finishes.
 
 ### Recommended deployment with external scheduling
 
@@ -146,6 +146,7 @@ All dependencies are updated automatically via [Renovate](https://github.com/ren
 | envx | [cplieger/envx](https://github.com/cplieger/envx) | Env var parsing |
 | slogx | [cplieger/slogx](https://github.com/cplieger/slogx) | Logging setup |
 | runesafe | [cplieger/runesafe](https://github.com/cplieger/runesafe) | Untrusted-string tagging (Plex titles) |
+| keyenc | [cplieger/keyenc](https://github.com/cplieger/keyenc) | Escaped composite keys for the title indexes |
 | golang.org/x/sync | [x/sync](https://pkg.go.dev/golang.org/x/sync) | Bounded concurrency (errgroup) |
 | rapid | [pgregory.net/rapid](https://github.com/flyingmutant/rapid) | Property-based tests (test-only) |
 

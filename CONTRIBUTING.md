@@ -110,7 +110,7 @@ enough to catch formatting drift; `golangci-lint fmt` fixes it.
 - **Stdlib-first.** Production code depends on the standard library plus a
   first-party shared-lib set (`cplieger/health`, `cplieger/httpx`,
   `cplieger/plexapi`, `cplieger/scheduler`, `cplieger/envx`, `cplieger/slogx`,
-  `cplieger/runesafe`) and `golang.org/x/sync` (errgroup). Don't add third-party
+  `cplieger/runesafe`, `cplieger/keyenc`) and `golang.org/x/sync` (errgroup). Don't add third-party
   runtime dependencies without discussing it first; a minimal, first-party-leaning
   dependency set is a deliberate supply-chain choice.
 - **Structured logging is key-value only.** `sloglint` runs with `kv-only`,
