@@ -60,6 +60,7 @@ func TestLoadDefaults(t *testing.T) {
 	t.Setenv("FALLBACK_TITLE_ONLY", "")
 	t.Setenv("TAUTULLI_URL", "")
 	t.Setenv("PLEX_URL", "")
+	t.Setenv("MAX_HISTORY_RECORDS", "")
 
 	cfg, err := Load()
 	if err != nil {
@@ -79,6 +80,9 @@ func TestLoadDefaults(t *testing.T) {
 	}
 	if cfg.FallbackTitleOnly {
 		t.Error("FallbackTitleOnly should default to false")
+	}
+	if cfg.MaxHistoryRecords != DefaultMaxHistoryRecords {
+		t.Errorf("MaxHistoryRecords = %d, want %d (the default)", cfg.MaxHistoryRecords, DefaultMaxHistoryRecords)
 	}
 }
 
@@ -370,6 +374,90 @@ func TestLoad_whitespaceOnlySecretWarnsButProceeds(t *testing.T) {
 			gotTokenWarn := strings.Contains(logs, "only whitespace") && strings.Contains(logs, "key=PLEX_TOKEN")
 			if gotTokenWarn != tt.wantTokenWarn {
 				t.Errorf("PLEX_TOKEN whitespace warning = %v, want %v; logs=%q", gotTokenWarn, tt.wantTokenWarn, logs)
+			}
+		})
+	}
+}
+
+// TestLoad_maxHistoryRecordsAcceptsPositiveValues pins the pass-through half of
+// the MAX_HISTORY_RECORDS sanity cap: a positive value reaches
+// Config.MaxHistoryRecords unchanged, and none of these values may trigger the
+// non-positive fallback warning. A cap of 1 is the smallest legal value and has
+// to survive; treating it as out of range would silently replace an operator's
+// deliberate cap with the 500000 default and log a cause that does not apply.
+func TestLoad_maxHistoryRecordsAcceptsPositiveValues(t *testing.T) {
+	tests := []struct {
+		name string
+		raw  string
+		want int
+	}{
+		{"smallest positive cap", "1", 1},
+		{"modest cap", "1000", 1000},
+		{"cap above the default", "2000000", 2_000_000},
+		{"surrounding spaces tolerated", "  250  ", 250},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			getLogs := captureLogs(t)
+			t.Setenv("TAUTULLI_API_KEY", "key")
+			t.Setenv("PLEX_TOKEN", "token")
+			t.Setenv("MAX_HISTORY_RECORDS", tt.raw)
+
+			cfg, err := Load()
+			if err != nil {
+				t.Fatalf("Load() error: %v", err)
+			}
+			if cfg.MaxHistoryRecords != tt.want {
+				t.Errorf("Load() with MAX_HISTORY_RECORDS=%q: MaxHistoryRecords = %d, want %d",
+					tt.raw, cfg.MaxHistoryRecords, tt.want)
+			}
+			if logs := getLogs(); strings.Contains(logs, "non-positive MAX_HISTORY_RECORDS") {
+				t.Errorf("Load() with MAX_HISTORY_RECORDS=%q warned about a non-positive value; logs=%q",
+					tt.raw, logs)
+			}
+		})
+	}
+}
+
+// TestLoad_maxHistoryRecordsFallsBackToDefault pins the fallback half of the
+// MAX_HISTORY_RECORDS sanity cap. A cap of zero or below would abort every run
+// at the first history page, so it is replaced by the default and warned about;
+// zero belongs to the replaced side, which is what separates a cap the operator
+// merely typed wrong from one they meant. An unset or malformed value arrives at
+// the same default through envx's own fallback and must NOT carry the
+// non-positive warning, since that warning names a cause that does not apply.
+func TestLoad_maxHistoryRecordsFallsBackToDefault(t *testing.T) {
+	tests := []struct {
+		name     string
+		raw      string
+		wantWarn bool
+	}{
+		{"zero is replaced", "0", true},
+		{"negative is replaced", "-1", true},
+		{"large negative is replaced", "-500000", true},
+		{"unset falls back silently", "", false},
+		{"malformed falls back silently", "notanumber", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			getLogs := captureLogs(t)
+			t.Setenv("TAUTULLI_API_KEY", "key")
+			t.Setenv("PLEX_TOKEN", "token")
+			t.Setenv("MAX_HISTORY_RECORDS", tt.raw)
+
+			cfg, err := Load()
+			if err != nil {
+				t.Fatalf("Load() error: %v", err)
+			}
+			if cfg.MaxHistoryRecords != DefaultMaxHistoryRecords {
+				t.Errorf("Load() with MAX_HISTORY_RECORDS=%q: MaxHistoryRecords = %d, want %d (the default)",
+					tt.raw, cfg.MaxHistoryRecords, DefaultMaxHistoryRecords)
+			}
+			logs := getLogs()
+			gotWarn := strings.Contains(logs, "non-positive MAX_HISTORY_RECORDS")
+			if gotWarn != tt.wantWarn {
+				t.Errorf("Load() with MAX_HISTORY_RECORDS=%q: non-positive warning = %v, want %v; logs=%q",
+					tt.raw, gotWarn, tt.wantWarn, logs)
 			}
 		})
 	}
