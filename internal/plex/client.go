@@ -12,8 +12,8 @@ import (
 	"log/slog"
 	"strconv"
 
-	"github.com/cplieger/plexapi"
-	"github.com/cplieger/runesafe"
+	"github.com/cplieger/plexapi/v2"
+	"github.com/cplieger/runesafe/v2"
 	"github.com/cplieger/tautulli-remap/internal/remap"
 )
 

@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/cplieger/envx"
+	"github.com/cplieger/envx/v2"
 )
 
 // DefaultMaxHistoryRecords is the default sanity cap on the Tautulli history

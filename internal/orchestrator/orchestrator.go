@@ -11,8 +11,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/cplieger/httpx/v4"
-	"github.com/cplieger/scheduler/v3"
+	"github.com/cplieger/httpx/v5"
+	"github.com/cplieger/scheduler/v4"
 	"github.com/cplieger/tautulli-remap/internal/config"
 	"github.com/cplieger/tautulli-remap/internal/remap"
 	"github.com/cplieger/tautulli-remap/internal/tautulli"

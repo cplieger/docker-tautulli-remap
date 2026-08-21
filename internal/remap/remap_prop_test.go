@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/cplieger/runesafe"
+	"github.com/cplieger/runesafe/v2"
 	"pgregory.net/rapid"
 )
 

@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/cplieger/envx"
+	"github.com/cplieger/envx/v2"
 )
 
 func TestLoad(t *testing.T) {
