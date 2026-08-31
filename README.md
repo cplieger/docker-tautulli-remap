@@ -9,6 +9,7 @@
 [![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/cplieger/tautulli-remap/badge)](https://scorecard.dev/viewer/?uri=github.com/cplieger/tautulli-remap)
 [![SBOM](https://img.shields.io/badge/SBOM-SPDX-1D4ED8)](https://github.com/cplieger/tautulli-remap/releases)
 
+<!-- hub-overview BEGIN -->
 Fix broken Tautulli watch history after reorganizing your Plex libraries.
 
 ## What it does
@@ -29,6 +30,7 @@ For each stale entry, it finds the correct current rating key in Plex using a ch
 - **Matching strategies with increasing aggressiveness**: starts with the exact ones (episode-GUID resolution for shows, GUID match for movies), falls back to title+year, and optionally title-only, giving you control over the risk/coverage tradeoff.
 - **Stdlib-first, minimal dependencies**: pure Go on the standard library plus a first-party shared-lib set (`health`, `httpx`, `plexapi`, `scheduler`, `envx`, `slogx`, `runesafe`, `keyenc`) and `golang.org/x/sync`, minimizing supply-chain risk.
 - **Distroless and rootless**: runs as `nonroot` on `gcr.io/distroless/static-debian13` with no shell or package manager.
+<!-- hub-overview END -->
 
 ## Quick start
 
