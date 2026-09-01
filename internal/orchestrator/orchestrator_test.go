@@ -436,11 +436,8 @@ func TestBuildPlexIndex_AllThreeIndexes(t *testing.T) {
 	if _, ok := idx.ByGUID["tvdb://81189"]; !ok {
 		t.Error("expected tvdb GUID in idx.ByGUID")
 	}
-	// These assertions deliberately do not spell the index key: its encoding is
-	// remap's private business (remap.titleYearKey / remap.titleKey), and a literal
-	// here would re-freeze that encoding in a package that never builds a key.
-	// What this test cares about is that both a movie and a show got indexed
-	// into all three maps.
+	// These assertions omit remap's private key encoding; they only check
+	// that both a movie and a show got indexed into all three maps.
 	if !hasIndexedEntry(idx.ByTitleYear, "The Matrix", "1999", remap.Movie) {
 		t.Error("expected the movie (The Matrix, 1999) in idx.ByTitleYear")
 	}
@@ -456,8 +453,7 @@ func TestBuildPlexIndex_AllThreeIndexes(t *testing.T) {
 }
 
 // hasIndexedEntry reports whether an index map holds an entry for the given
-// title, year and media type, without depending on how remap encodes its
-// composite keys.
+// title, year and media type, without depending on remap's key encoding.
 func hasIndexedEntry(index map[string]remap.PlexEntry, title, year string, mediaType remap.MediaType) bool {
 	for _, e := range index {
 		if e.Title.Raw() == title && e.Year == year && e.Type == mediaType {
@@ -798,8 +794,7 @@ func TestRun_DryRunSkipsBackup(t *testing.T) {
 }
 
 // TestRun_NonDryRunCallsBackup pins the deferred-backup contract: a live run
-// with at least one mapping ready backs up Tautulli, and does so before the
-// first write (update_metadata_details).
+// with a mapping ready backs up before the first write.
 func TestRun_NonDryRunCallsBackup(t *testing.T) {
 	var mu sync.Mutex
 	var cmds []string
@@ -859,7 +854,7 @@ func TestRun_NonDryRunCallsBackup(t *testing.T) {
 }
 
 // TestRun_LiveNoWorkSkipsBackup pins the other half of the deferred-backup
-// contract: a live run that finds nothing stale never spends a backup.
+// contract: a run with nothing stale never spends a backup.
 func TestRun_LiveNoWorkSkipsBackup(t *testing.T) {
 	backupCalled := false
 	cfg := testServer(t, func(w http.ResponseWriter, r *http.Request) {
@@ -884,8 +879,8 @@ func TestRun_LiveNoWorkSkipsBackup(t *testing.T) {
 }
 
 // TestRun_LiveStaleUnmatchedSkipsBackup exercises the backup gate itself: a
-// stale item that no strategy matches leaves zero mappings, so the run
-// completes (successfully) without ever calling backup_db.
+// stale item no strategy matches leaves zero mappings, so backup_db is never
+// called.
 func TestRun_LiveStaleUnmatchedSkipsBackup(t *testing.T) {
 	backupCalled := false
 	cfg := testServer(t, func(w http.ResponseWriter, r *http.Request) {
@@ -993,9 +988,8 @@ func TestRun_BackupFailureAborts(t *testing.T) {
 	}
 }
 
-// TestRun_ClearFailureFailsRun pins the cleanup-propagation contract: a live
-// run whose updates land but whose recently-added clear fails must report
-// failure, not success with silently incomplete cleanup.
+// TestRun_ClearFailureFailsRun pins the cleanup-propagation contract: updates
+// landing but the recently-added clear failing must report failure.
 func TestRun_ClearFailureFailsRun(t *testing.T) {
 	cfg := testServer(t, func(w http.ResponseWriter, r *http.Request) {
 		cmd := r.URL.Query().Get("cmd")
@@ -1029,10 +1023,9 @@ func TestRun_ClearFailureFailsRun(t *testing.T) {
 	}
 }
 
-// TestRun_RefusesOverlappingRun pins the single-flight contract: while one
-// pass holds the run lock, a concurrent Run refuses immediately — making no
-// Tautulli or Plex call — and returns false; once the holder finishes and
-// releases the lock, a subsequent pass proceeds normally.
+// TestRun_RefusesOverlappingRun pins the single-flight contract: a concurrent
+// Run refuses immediately while another holds the lock, making no calls;
+// once released, the next pass proceeds normally.
 func TestRun_RefusesOverlappingRun(t *testing.T) {
 	release := make(chan struct{})
 	firstEntered := make(chan struct{})
@@ -1151,10 +1144,8 @@ func TestRun_AbortsOnPartialSectionFailure(t *testing.T) {
 	}
 }
 
-// TestFindStaleKeys_PlexErrorAborts pins FIX 6's fail-closed behavior at the
-// FindStaleKeys layer: when a Plex existence check returns an error (a real
-// outage, not a 404), FindStaleKeys returns that error and marks nothing
-// stale, so the caller aborts instead of treating undetermined items as stale.
+// TestFindStaleKeys_PlexErrorAborts pins the fail-closed rule: a Plex
+// existence-check error (not a 404) must abort rather than mark items stale.
 func TestFindStaleKeys_PlexErrorAborts(t *testing.T) {
 	cfg := testServer(t, func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)
@@ -1172,9 +1163,9 @@ func TestFindStaleKeys_PlexErrorAborts(t *testing.T) {
 	}
 }
 
-// TestRun_AbortsWhenPlexCheckErrors pins FIX 6 end-to-end: a persistent Plex
-// error during the stale-key check aborts the run (Run returns false) rather
-// than treating the unverifiable item as stale and remapping it.
+// TestRun_AbortsWhenPlexCheckErrors pins the same rule end-to-end: a
+// persistent Plex error during the stale-key check aborts the run rather
+// than remapping an unverifiable item.
 func TestRun_AbortsWhenPlexCheckErrors(t *testing.T) {
 	cfg := testServer(t, func(w http.ResponseWriter, r *http.Request) {
 		cmd := r.URL.Query().Get("cmd")
@@ -1204,10 +1195,9 @@ func TestRun_AbortsWhenPlexCheckErrors(t *testing.T) {
 	}
 }
 
-// TestRun_BreakerTripAfterSuccessReturnsFalse pins FIX 3: when the consecutive-
-// failure circuit breaker trips DURING the remap phase, the run fails even
-// though at least one update already landed (updated > 0). The first remap
-// succeeds, then maxConsecutiveFailures (10) consecutive failures trip it.
+// TestRun_BreakerTripAfterSuccessReturnsFalse pins that the run fails when
+// the consecutive-failure breaker trips during remap, even after >=1 update
+// already landed.
 func TestRun_BreakerTripAfterSuccessReturnsFalse(t *testing.T) {
 	const n = 12
 	var updateCalls atomic.Int64
@@ -1226,8 +1216,8 @@ func TestRun_BreakerTripAfterSuccessReturnsFalse(t *testing.T) {
 			sb.WriteString(`]}}}`)
 			w.Write([]byte(sb.String()))
 		case cmd == "update_metadata_details":
-			// First update succeeds; every subsequent one fails, tripping the
-			// breaker only after the success has been counted (updated > 0).
+			// First succeeds; every later call fails, tripping the breaker
+			// only after the success was counted.
 			if updateCalls.Add(1) == 1 {
 				w.Write([]byte(`{"response":{"result":"success"}}`))
 			} else {
@@ -1264,11 +1254,9 @@ func TestRun_BreakerTripAfterSuccessReturnsFalse(t *testing.T) {
 	}
 }
 
-// TestRunScheduler_ShutdownInterruptedRunNotCountedAsFailure verifies that when
-// a scheduled run is interrupted by context cancellation (graceful shutdown),
-// RunScheduler treats it as a shutdown rather than a failure: it does not log a
-// run failure, does not count the run toward the consecutive-failure damping
-// threshold, and does not flip the health marker to unhealthy.
+// TestRunScheduler_ShutdownInterruptedRunNotCountedAsFailure verifies a
+// scheduled run interrupted by shutdown is not logged as a failure, does not
+// count toward the failure threshold, and does not flip the health marker.
 func TestRunScheduler_ShutdownInterruptedRunNotCountedAsFailure(t *testing.T) {
 	var buf strings.Builder
 	orig := slog.Default()
@@ -1298,10 +1286,8 @@ func TestRunScheduler_ShutdownInterruptedRunNotCountedAsFailure(t *testing.T) {
 	}
 }
 
-// TestRun_CancelledContextReturnsFalse verifies that a run interrupted by
-// graceful shutdown reports failure rather than false success: with an
-// already-cancelled context, Run returns false even though history collection
-// itself succeeded, so a cancelled run never reports a successful pass.
+// TestRun_CancelledContextReturnsFalse verifies a run cancelled mid-flight
+// reports failure, not success, even if history collection itself succeeded.
 func TestRun_CancelledContextReturnsFalse(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
@@ -1327,8 +1313,8 @@ func TestRun_PartialRemapFailureStillSucceeds(t *testing.T) {
 				]
 			}}}`))
 		case cmd == "update_metadata_details":
-			// First update lands, second fails: one failure is far below the
-			// 10-failure breaker threshold, so the run still makes progress.
+			// One failure is far below the breaker threshold, so the run
+			// still makes progress.
 			if updates.Add(1) == 1 {
 				w.Write([]byte(`{"response":{"result":"success"}}`))
 			} else {
@@ -1356,11 +1342,9 @@ func TestRun_PartialRemapFailureStillSucceeds(t *testing.T) {
 	}
 }
 
-// scriptedScheduler drives RunScheduler deterministically. Each GetHistory call
-// consumes the next entry of failPlan (true = the run fails, false = it
-// succeeds); once the plan is exhausted it cancels the scheduler so RunScheduler
-// returns instead of ticking forever. Failure counting is driven by the plan,
-// not by wall-clock timing, so the assertions are deterministic.
+// scriptedScheduler drives RunScheduler deterministically: each GetHistory
+// call consumes the next failPlan entry, cancelling once the plan is
+// exhausted so RunScheduler returns instead of ticking forever.
 type scriptedScheduler struct {
 	fakeTautulli
 	failPlan []bool
@@ -1428,8 +1412,8 @@ func TestRunScheduler_ResetsFailureCountOnSuccess(t *testing.T) {
 	// and the Cleanup safety net, so its lifetime is tied to Cleanup.
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
-	// fail, fail, succeed (resets the counter to 0), fail: the counter never
-	// reaches the threshold of 3, so the marker must never flip unhealthy.
+	// fail, fail, succeed (resets the counter), fail: never reaches the
+	// threshold of 3, so the marker must never flip unhealthy.
 	ft := &scriptedScheduler{failPlan: []bool{true, true, false, true}, cancel: cancel}
 	o := New(&fakePlex{}, ft, &config.Config{DryRun: true, RemapInterval: time.Millisecond})
 	o.RunLockPath = filepath.Join(t.TempDir(), "remap.lock")
@@ -1557,8 +1541,7 @@ func TestRun_DryRunWithMatch_PreviewsClear(t *testing.T) {
 	}
 }
 
-// resolveFakePlex embeds fakePlex and overrides ResolveEpisodeShow with a
-// programmable function so show-resolution behaviour can be exercised directly.
+// resolveFakePlex embeds fakePlex with a programmable ResolveEpisodeShow.
 type resolveFakePlex struct {
 	fakePlex
 	resolve func(ctx context.Context, guid string) (string, error)

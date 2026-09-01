@@ -36,9 +36,9 @@ func TestMediaType(t *testing.T) {
 	}
 }
 
-// TestParseMediaType pins the public string-to-MediaType mapping, including the
-// default branch where an unrecognized type yields the empty MediaType (which
-// causes such items to be dropped from the index downstream).
+// TestParseMediaType pins the string-to-MediaType mapping, including that an
+// unrecognized type yields the empty MediaType (which drops such items from
+// the index downstream).
 func TestParseMediaType(t *testing.T) {
 	tests := []struct {
 		in   string

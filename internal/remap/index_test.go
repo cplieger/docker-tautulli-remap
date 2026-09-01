@@ -701,12 +701,10 @@ func TestIndexKeysSeparatorCannotForgeAnotherSlot(t *testing.T) {
 	})
 }
 
-// TestIndexKeysBuilderAndLookupAgree pins the invariant the two helpers exist
-// for: the key BuildPlexIndex stores an entry under is the same key matchOne
-// looks it up by. Both call the helpers, so this holds by construction — the
-// test is the regression guard for anyone who reintroduces a hand-built key at
-// either end, where the failure mode is silent (every lookup misses and no
-// stale item is ever remapped).
+// TestIndexKeysBuilderAndLookupAgree pins that the key BuildPlexIndex stores
+// under is the same key matchOne looks up by — a regression guard against a
+// hand-built key at either end, where the failure is silent (every lookup
+// misses).
 func TestIndexKeysBuilderAndLookupAgree(t *testing.T) {
 	t.Parallel()
 	fetcher := &collidingFetcher{

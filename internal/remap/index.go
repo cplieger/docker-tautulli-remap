@@ -30,55 +30,28 @@ func NormalizeTitle(title string) string {
 
 // titleYearKey builds the composite lookup key for the byTitleYear index from a
 // pre-normalized title, the year, and the media type. Folding the media type
-// into the key keeps cross-type entries that share a title and year (a Movie
-// "Dune" 2021 and a Show "Dune" 2021) in DISTINCT slots, so only genuine
-// same-type duplicates collide and trigger refuse-to-match. Both add and
-// matchOne build the key through this helper, so the "index key == lookup key"
-// invariant holds by construction.
+// into the key keeps a same-title-and-year Movie/Show pair in distinct slots.
 //
-// The components are escaped with keyenc rather than concatenated because the
-// first one is free-form: normalizedTitle is a Plex media title, lower-cased
-// and trimmed but otherwise arbitrary operator- and metadata-agent-supplied
-// text, and real titles do contain the separator ("Dune | Extended Edition").
-// A collision here is not a cache miss, it is a merged identity, and this index
-// decides which rating key gets written into Tautulli's history database:
-// either two different Plex items land in one slot and the ambiguity guard
-// prunes it, silently refusing a legitimate remap, or a history item's lookup
-// resolves to the entry of a DIFFERENT item and live mode writes that wrong
-// rating key into the database, re-attaching watch history to the wrong title.
-//
-// No such collision is reachable today, because the two trailing components
-// have constrained alphabets: year is strconv.Itoa of an int and mediaType is
-// one of ParseMediaType's enum values (or empty). That safety is a property of
-// the current field list rather than of the key — appending a free-form
-// component (an edition tag, a section name) or widening year to a range would
-// open it silently, at a site whose failure mode is a wrong database write.
-// keyenc makes it a property of the key.
-//
-// The separator changed from '|' to keyenc's ':' with the adoption. Free here:
-// the three indexes are rebuilt in memory by every BuildPlexIndex call and
-// never persisted, logged as keys, or compared across runs.
+// Components are escaped with keyenc rather than concatenated because
+// normalizedTitle is arbitrary operator-supplied text and can contain the
+// separator ("Dune | Extended Edition"); a collision here merges two Plex
+// items' identity in the index that decides what rating key gets written into
+// Tautulli's history. No collision is reachable today (year and mediaType
+// have constrained alphabets), but that safety is a property of the current
+// field list, not of the key — keyenc makes it a property of the key instead.
 func titleYearKey(normalizedTitle, year string, mediaType MediaType) string {
 	return keyenc.Join(normalizedTitle, year, string(mediaType))
 }
 
-// titleKey builds the composite lookup key for the byTitle index from a
-// pre-normalized title and the media type. See titleYearKey for why the media
-// type is part of the key, and why the components are escaped rather than
-// concatenated.
+// titleKey builds the composite lookup key for the byTitle index. See
+// titleYearKey for why the components are escaped rather than concatenated.
 func titleKey(normalizedTitle string, mediaType MediaType) string {
 	return keyenc.Join(normalizedTitle, string(mediaType))
 }
 
 // Index is the Plex library lookup MatchStaleItems consumes: three maps over
-// one entry set, each keyed by a different match strategy. Grouping them in a
-// struct (rather than three positional map[string]PlexEntry parameters) makes
-// every assignment to a strategy NAMED: the old positional form let a swapped
-// pair compile invisibly, match on the wrong key, and report success. The
-// residual gap is honest to state: the fields share one map type, so a
-// composite literal that names the wrong field still compiles — but it now
-// says ByGUID: byTitleYear at the one construction site instead of hiding in
-// an argument list.
+// one entry set, each keyed by a different match strategy, grouped in a
+// struct so every assignment to a strategy is named rather than positional.
 type Index struct {
 	// ByGUID is keyed by the normalized global GUID. Deliberately NOT
 	// type-keyed (TMDB movies and TV series share the tmdb://<id> namespace),
@@ -97,13 +70,11 @@ func (ix Index) Empty() bool {
 	return len(ix.ByGUID) == 0 && len(ix.ByTitleYear) == 0 && len(ix.ByTitle) == 0
 }
 
-// plexIndex accumulates the three lookup maps (by GUID, by title+year, and by
-// title) while library sections are scanned concurrently. Its mutex guards all
-// three maps so sections can be indexed in parallel. The three ambiguous sets
+// plexIndex accumulates the three lookup maps while library sections are
+// scanned concurrently; its mutex guards all three. The three ambiguous sets
 // record any key for which two DIFFERENT rating keys ever competed; such keys
-// are deleted from the lookup maps before BuildPlexIndex returns so matchOne
-// refuses to match on them (deterministic and order-independent, unlike the
-// former last-writer-wins resolution).
+// are deleted from the lookup maps before BuildPlexIndex returns, so matchOne
+// refuses to match on them deterministically instead of last-writer-wins.
 type plexIndex struct {
 	byGUID             map[string]PlexEntry
 	byTitleYear        map[string]PlexEntry
@@ -115,8 +86,7 @@ type plexIndex struct {
 }
 
 // index snapshots the accumulator's three lookup maps into the exported
-// Index shape — the ONE place the field-to-strategy mapping is written, so a
-// transposition cannot creep in at a second construction site.
+// Index shape — the one place the field-to-strategy mapping is written.
 func (idx *plexIndex) index() Index {
 	return Index{ByGUID: idx.byGUID, ByTitleYear: idx.byTitleYear, ByTitle: idx.byTitle}
 }
@@ -133,18 +103,13 @@ func newPlexIndex() *plexIndex {
 }
 
 // add indexes a single library item under all of its GUIDs, its
-// (title, year, media type), and its (title, media type). The title-based keys
-// fold in the media type (see titleYearKey/titleKey) so a Movie and a Show that
-// share a title -- and possibly a year -- occupy distinct slots and do not
-// falsely collide; only a genuine same-type duplicate marks a key ambiguous.
-// byGUID stays keyed by the global GUID alone, since a GUID is meant to be
-// unique. A debug line is emitted when an existing GUID or title key is
-// shadowed by a different rating key; the title+year shadow is logged at warn
-// instead, because the title+year fallback is on by default, so an ambiguous
-// slot there is worth surfacing to the operator. Any collision (two different
-// rating keys competing for one key) marks that key ambiguous so it is later
-// removed from the lookup maps (refuse-to-match) and cannot drive a match: the
-// ambiguous slot is dropped rather than silently remapped to the wrong key.
+// (title, year, media type), and its (title, media type); byGUID stays keyed
+// by the GUID alone. Any collision (two different rating keys competing for
+// one key) marks that key ambiguous so it is later removed from the lookup
+// maps (refuse-to-match) rather than silently remapped to the wrong key. A
+// title+year shadow logs at warn rather than debug because that fallback is
+// on by default, making an ambiguous slot there worth surfacing to the
+// operator.
 func (idx *plexIndex) add(li LibItem, mediaType MediaType) {
 	entry := PlexEntry{
 		RatingKey: strconv.Itoa(li.RatingKey),
@@ -188,9 +153,8 @@ func (idx *plexIndex) add(li LibItem, mediaType MediaType) {
 }
 
 // scanSection fetches one library section and indexes every item it returns.
-// A cancelled context short-circuits before the fetch (reported as no failure).
-// A non-nil return means the section's items could not be fetched, so the
-// caller can count it as a failed section rather than an empty one.
+// A cancelled context short-circuits before the fetch (reported as no
+// failure). A non-nil return means the section's items could not be fetched.
 func (idx *plexIndex) scanSection(ctx context.Context, plex PlexLibraryFetcher, sec Section) error {
 	if ctx.Err() != nil {
 		return nil
@@ -200,7 +164,7 @@ func (idx *plexIndex) scanSection(ctx context.Context, plex PlexLibraryFetcher, 
 	items, err := plex.LibraryAll(ctx, sec.Key)
 	if err != nil {
 		if ctx.Err() != nil {
-			return nil // cancelled mid-fetch (e.g. shutdown): clean short-circuit, not a section failure
+			return nil // cancelled mid-fetch: clean short-circuit, not a section failure
 		}
 		slog.Error("failed to fetch Plex library section",
 			"title", sec.Title, "key", sec.Key, "error", err)
@@ -213,12 +177,10 @@ func (idx *plexIndex) scanSection(ctx context.Context, plex PlexLibraryFetcher, 
 	return nil
 }
 
-// BuildPlexIndex builds the Index (GUID, title+year and title lookups) from
-// the Plex library sections. It fetches sections concurrently up to the given
-// parallelism limit. failedSections reports how many sections could not be
-// fetched (including a total failure to list sections); a non-zero count means
-// the index is incomplete, so the caller must treat Plex as degraded rather
-// than trusting a partial index.
+// BuildPlexIndex builds the Index from the Plex library sections, fetching
+// them concurrently up to parallelism. failedSections reports how many
+// sections could not be fetched (including a total failure to list
+// sections); a non-zero count means the index is incomplete.
 func BuildPlexIndex(ctx context.Context, plex PlexLibraryFetcher, parallelism int) (idx Index, failedSections int) {
 	acc := newPlexIndex()
 	sections, err := plex.LibrarySections(ctx)
@@ -249,10 +211,8 @@ func BuildPlexIndex(ctx context.Context, plex PlexLibraryFetcher, parallelism in
 	_ = g.Wait()
 
 	// Refuse to match on any ambiguous slot: a key for which two different
-	// rating keys ever competed is removed from its lookup map, so matchOne
-	// cannot match on it. This is deterministic and order-independent, unlike
-	// the former last-writer-wins behavior (where the winning key depended on
-	// concurrent section scan ordering).
+	// rating keys ever competed is removed from its lookup map, deterministic
+	// and order-independent rather than the former last-writer-wins.
 	for k := range acc.ambiguousGUID {
 		delete(acc.byGUID, k)
 	}

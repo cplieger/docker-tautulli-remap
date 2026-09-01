@@ -24,9 +24,8 @@ func TestNormalizeGUID(t *testing.T) {
 		{"plex movie", "plex://movie/5d776b59ad5437001f79c6f8", "plex://movie/5d776b59ad5437001f79c6f8"},
 		{"plex episode", "plex://episode/5d9c135046115600200d30a2", "plex://episode/5d9c135046115600200d30a2"},
 		{"mbid", "mbid://abcdef01-2345-6789-abcd-ef0123456789", "mbid://abcdef01-2345-6789-abcd-ef0123456789"},
-		// A leading-slash id (separator at index 0) strips to empty, and an
-		// empty id is unsupported: "thetvdb:///271557" normalizes to "" (not
-		// "tvdb://" and never "tvdb:///271557").
+		// A leading-slash id (index 0) strips to empty; empty id is
+		// unsupported.
 		{"thetvdb leading-slash id strips to empty", "com.plexapp.agents.thetvdb:///271557", ""},
 		{"local unsupported", "local://616507", ""},
 		{"agents.none unsupported", "com.plexapp.agents.none://632d404bf27d52a513ccd45e4df820cd276f3090?lang=xn", ""},
@@ -67,8 +66,7 @@ func TestExtractAfter(t *testing.T) {
 		{"imdb://tt1234567", "imdb://", "tt1234567"},
 		{"com.plexapp.agents.imdb://tt1234567?lang=en", "imdb://", "tt1234567"},
 		{"tmdb://12345", "imdb://", ""},
-		// A query separator at index 0 of the remainder must still be stripped:
-		// "imdb://?lang=en" yields "" (everything after the prefix is query).
+		// A query separator at the remainder's start must still strip.
 		{"imdb://?lang=en", "imdb://", ""},
 		{"", "imdb://", ""},
 	}
@@ -93,11 +91,8 @@ func TestMatchOne(t *testing.T) {
 	})
 
 	t.Run("guid cross-type rejected", func(t *testing.T) {
-		// A stale Movie and a Show can share the tmdb:// namespace (TMDB IDs are
-		// not type-tagged). byGUID is keyed by the bare GUID, so strategy 1 must
-		// guard on media type: a stale Movie's tmdb://12345 must NOT match a Show
-		// indexed under the same normalized GUID, otherwise the history row would
-		// be remapped onto the wrong-type item.
+		// byGUID is keyed by the bare GUID, not by type, so a stale Movie's
+		// tmdb:// ID must not match a Show indexed under the same GUID.
 		item := &TautulliEntry{GUID: "tmdb://12345", Title: "Quiz Show", Year: "1994", MediaType: Movie}
 		byGUID := map[string]PlexEntry{"tmdb://12345": {RatingKey: "200", Title: "Quiz Show", Year: "1994", Type: Show}}
 		key, method, matchedYear := matchOne(item, "100", nil, Index{ByGUID: byGUID}, Fallbacks{TitleYear: true, TitleOnly: true})
@@ -127,8 +122,7 @@ func TestMatchOne(t *testing.T) {
 	})
 
 	t.Run("episode-guid resolution takes priority over GUID index", func(t *testing.T) {
-		// A resolved show key is exact; it must win even when the GUID index
-		// would also produce a (necessarily lower-confidence) match.
+		// A resolved show key is exact; it wins over a lower-confidence GUID match.
 		item := &TautulliEntry{Title: "Show", Year: "2021", MediaType: Show, GUID: "tvdb://1"}
 		byGUID := map[string]PlexEntry{"tvdb://1": {RatingKey: "999", Type: Show}}
 		resolved := map[string]string{"100": "200"}
@@ -143,7 +137,7 @@ func TestMatchOne(t *testing.T) {
 
 	t.Run("episode-guid resolution to the same key is not a match", func(t *testing.T) {
 		item := &TautulliEntry{Title: "Show", Year: "2021", MediaType: Show}
-		resolved := map[string]string{"100": "100"} // unchanged key
+		resolved := map[string]string{"100": "100"}
 		key, method, matchedYear := matchOne(item, "100", resolved, Index{}, Fallbacks{TitleYear: true, TitleOnly: true})
 		if key != "" || method != "" || matchedYear != "" {
 			t.Errorf("got (%q, %q, %q), want empty (a no-op resolution must not match)", key, method, matchedYear)
@@ -502,9 +496,8 @@ func TestMatchStaleItems(t *testing.T) {
 			checks: []check{matchCount(0, 1)},
 		},
 		{
-			// FIX 1: the title+year lookup key folds in the stale item's media
-			// type, so a stale Movie can only resolve to a Movie slot. Its only
-			// same-title+year index entry here is a Show, so it must NOT match.
+			// The title+year lookup key folds in media type, so a stale Movie
+			// can only resolve to a Movie slot.
 			name:        "title+year rejects type mismatch",
 			stale:       map[string]TautulliEntry{"100": {RatingKey: "100", Title: "Heat", Year: "1995", MediaType: Movie}},
 			byTitleYear: map[string]PlexEntry{titleYearKey("heat", "1995", Show): {RatingKey: "200", Title: "Heat", Year: "1995", Type: Show}},
@@ -618,10 +611,8 @@ func TestMatchStaleItems(t *testing.T) {
 }
 
 func TestNormalizeGUID_emptyID_returnsEmpty(t *testing.T) {
-	// The empty-id guard returns "" for ANY mapping whose extracted id is
-	// empty, including the non-StripPath route where extractAfter strips a
-	// bare prefix or a query-only remainder to "". Without the guard these
-	// return the bare canonical prefix (e.g. "imdb://").
+	// Without this guard, an empty extracted id would return the bare
+	// canonical prefix (e.g. "imdb://") instead of "".
 	tests := []struct {
 		name, guid, want string
 	}{
@@ -644,10 +635,8 @@ func TestNormalizeGUID_emptyID_returnsEmpty(t *testing.T) {
 }
 
 func TestMatchOne_titleYearTakesPriorityOverTitleOnly(t *testing.T) {
-	// Both the title+year and title-only indexes hold a valid (non-stale) match
-	// for the item. The chain is ordered by increasing aggressiveness, so
-	// strategy 2 (title+year) must win and the riskier strategy 3 (title-only)
-	// must never be reached when title+year already resolves.
+	// Both indexes hold a valid match; the chain is ordered by increasing
+	// aggressiveness, so title+year must win and title-only must never run.
 	item := &TautulliEntry{Title: "Dune", Year: "2020", MediaType: Movie}
 	byTitleYear := map[string]PlexEntry{titleYearKey("dune", "2020", Movie): {RatingKey: "200", Title: "Dune", Year: "2020", Type: Movie}}
 	byTitle := map[string]PlexEntry{titleKey("dune", Movie): {RatingKey: "300", Title: "Dune", Year: "2021", Type: Movie}}
@@ -664,10 +653,9 @@ func TestMatchOne_titleYearTakesPriorityOverTitleOnly(t *testing.T) {
 }
 
 func TestMatchOne_titleOnlyCarriesYearTransition(t *testing.T) {
-	// A title-only match is the riskiest strategy and may land on an entry
-	// with a different year. The method stays the closed MethodTitleOnly enum
-	// value; the tolerated drift is carried separately in matchedYear (the
-	// matched entry's year) for the operator-facing remap log line.
+	// Title-only is the riskiest strategy and may land on a different year.
+	// Method stays the closed MethodTitleOnly value; drift is carried
+	// separately in matchedYear for the operator-facing remap log line.
 	item := &TautulliEntry{Title: "Dune", Year: "1984", MediaType: Movie}
 	byTitle := map[string]PlexEntry{titleKey("dune", Movie): {RatingKey: "300", Title: "Dune", Year: "2021", Type: Movie}}
 	key, method, matchedYear := matchOne(item, "100", nil, Index{ByTitle: byTitle}, Fallbacks{TitleYear: true, TitleOnly: true})
@@ -683,9 +671,8 @@ func TestMatchOne_titleOnlyCarriesYearTransition(t *testing.T) {
 }
 
 func TestMatchStaleItems_EpisodeGUIDResolution(t *testing.T) {
-	// A stale show carrying episode GUIDs that the orchestrator resolved to a
-	// current key must match via the episode-guid strategy, ahead of (and
-	// without needing) any title/year index entry.
+	// A stale show with resolved episode GUIDs must match via episode-guid,
+	// ahead of any title/year index entry.
 	stale := map[string]TautulliEntry{
 		"100": {
 			RatingKey: "100", Title: "Show", Year: "2021", MediaType: Show,
@@ -703,12 +690,10 @@ func TestMatchStaleItems_EpisodeGUIDResolution(t *testing.T) {
 	}
 }
 
-// TestProcessHistoryRow_UnknownMediaTypeSkipped is a focused regression test for
-// the fail-open processing contract. HistoryItem.MediaType is decoded as a plain
-// string (so an unexpected wire value never fails the page decode), and
-// ProcessHistoryRow parses it via ParseMediaType: a row whose media_type is
-// "track" (music) is skipped and contributes no entry, while the movie and
-// episode rows in the same batch are processed normally.
+// TestProcessHistoryRow_UnknownMediaTypeSkipped pins the fail-open contract:
+// media_type decodes as a plain string, so a row with an unrecognized type
+// ("track") is skipped by ParseMediaType while movie/episode rows in the same
+// batch still process.
 func TestProcessHistoryRow_UnknownMediaTypeSkipped(t *testing.T) {
 	items := map[string]TautulliEntry{}
 	rows := []*HistoryItem{
@@ -733,10 +718,8 @@ func TestProcessHistoryRow_UnknownMediaTypeSkipped(t *testing.T) {
 	}
 }
 
-// TestIndexEmpty pins the orchestrator's "cannot match anything" abort
-// signal directly, so the abort test cannot be Empty's only oracle: Empty is
-// true exactly when all three strategies have zero entries, and one entry in
-// ANY strategy makes the index usable.
+// TestIndexEmpty pins the orchestrator's "cannot match anything" abort signal:
+// Empty is true only when all three strategies have zero entries.
 func TestIndexEmpty(t *testing.T) {
 	entry := map[string]PlexEntry{"k": {RatingKey: "1"}}
 	cases := map[string]struct {

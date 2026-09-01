@@ -5,13 +5,10 @@ import (
 	"testing"
 )
 
-// TestFinishTrigger pins the trigger subcommand's exit-code contract, in
-// particular the graceful-shutdown guard: a cancelled context means the pass
-// did not verifiably complete, so it exits with the distinct retryable
-// exitInterrupted code (never 0 — an interrupted pass must not be recorded as
-// success by the external scheduler — and never 1, nothing failed) regardless
-// of Run's bool, and never touches the health marker. Only a live-context run
-// lets Run's bool pick exit 0 vs 1.
+// TestFinishTrigger pins the exit-code contract: a cancelled context means the
+// pass did not verifiably complete, so it always exits exitInterrupted
+// (never 0 or 1) and never touches the health marker, regardless of Run's
+// bool. Only a live context lets Run's bool pick exit 0 vs 1.
 func TestFinishTrigger(t *testing.T) {
 	tests := []struct {
 		wantHealthy *bool // nil => setHealthy must not be called
@@ -27,8 +24,8 @@ func TestFinishTrigger(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			// Background, not t.Context(): the cancel cases below pre-cancel
-			// this ctx on purpose to drive the exitInterrupted path.
+			// Background, not t.Context(): pre-cancelled on purpose to drive
+			// the exitInterrupted path.
 			ctx, cancel := context.WithCancel(context.Background())
 			defer cancel()
 			if tt.cancel {

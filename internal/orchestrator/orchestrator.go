@@ -24,11 +24,9 @@ const (
 	plexParallelism        = 8
 )
 
-// defaultRunLockPath is the flock(2) lock file that serializes remap passes
-// across processes. It lives on the same container-private /tmp tmpfs as the
-// health marker — the one writable path under the hardened profile — so the
-// resident process and every `docker exec … trigger` child contend on the
-// same file.
+// defaultRunLockPath is the flock(2) lock file serializing remap passes
+// across processes: the resident process and every `docker exec … trigger`
+// child contend on the same container-private /tmp tmpfs path.
 const defaultRunLockPath = "/tmp/.remap.lock"
 
 // historyPageSize is the number of Tautulli history rows requested per page;
@@ -101,9 +99,9 @@ func New(p PlexClient, t TautulliClient, cfg *config.Config) *Orchestrator {
 	return &Orchestrator{plex: p, tautulli: t, cfg: cfg}
 }
 
-// createBackup makes a Tautulli backup before any mutation. In dry-run mode it
-// is skipped (and reports success). In live mode a failed backup returns false
-// so the caller aborts without mutating Tautulli, since there would be no
+// createBackup makes a Tautulli backup before any mutation; skipped (and
+// reports success) in dry-run mode. In live mode a failed backup returns
+// false so the caller aborts without mutating Tautulli — there would be no
 // recovery point.
 func (o *Orchestrator) createBackup(ctx context.Context) bool {
 	if o.cfg.DryRun {
@@ -125,15 +123,11 @@ func (o *Orchestrator) createBackup(ctx context.Context) bool {
 
 // Run executes the remap workflow. Returns true on success.
 //
-// A cross-process flock serializes passes: the scheduled loop, an Ofelia
+// A cross-process flock serializes passes (the scheduled loop, an Ofelia
 // job-exec trigger, and a manual `docker exec … trigger` all run Run in
-// (potentially) separate processes sharing the container's /tmp, and nothing
-// else guarantees mutual exclusion (Ofelia's no-overlap covers only its own
-// job). A pass that finds the lock held refuses immediately — before any
-// Tautulli or Plex call — and reports failure: the trigger exits non-zero for
-// its scheduler, and a scheduled tick counts toward the unhealthy threshold,
-// so a wedged run eventually surfaces through both the exit-code alert and
-// the health marker instead of being silently skipped.
+// potentially separate processes sharing /tmp; Ofelia's no-overlap covers
+// only its own job). A pass that finds the lock held refuses immediately,
+// before any Tautulli or Plex call, and reports failure.
 func (o *Orchestrator) Run(ctx context.Context) bool {
 	lock, ok := o.acquireRunLock()
 	if !ok {
@@ -184,12 +178,9 @@ func (o *Orchestrator) Run(ctx context.Context) bool {
 		return false
 	}
 
-	// Step 3.5: Resolve stale shows to their current key via episode GUIDs.
-	// This is the exact, collision-free match for shows; the index-based
-	// heuristics below remain as fallbacks (and handle movies + legacy shows).
-	// A cancellation mid-resolution needs no early return here: matching is a
-	// pure in-memory step and the apply phase already aborts on ctx.Err() before
-	// mutating Tautulli.
+	// Step 3.5: resolve stale shows to their current key via episode GUID —
+	// exact and collision-free; the index heuristics below remain as
+	// fallbacks for movies and legacy shows.
 	slog.Info("step 3.5: resolving shows via episode GUID")
 	resolved := o.resolveStaleShows(ctx, stale)
 
@@ -198,10 +189,9 @@ func (o *Orchestrator) Run(ctx context.Context) bool {
 	matched, unmatched := remap.MatchStaleItems(stale, resolved, idx,
 		remap.Fallbacks{TitleYear: o.cfg.FallbackTitleYear, TitleOnly: o.cfg.FallbackTitleOnly})
 
-	// Step 4.5: Backup, deferred until at least one mapping is ready to apply
-	// so a pass that finds nothing to mutate never spends a backup. It still
-	// precedes the first write: ApplyRemappings and the recently-added clear
-	// are the only mutation points and both run after this gate.
+	// Step 4.5: backup, deferred until at least one mapping is ready so a
+	// pass with nothing to mutate never spends one. It still precedes the
+	// first write (ApplyRemappings and the recently-added clear).
 	if len(matched) > 0 && !o.createBackup(ctx) {
 		return false
 	}
@@ -209,10 +199,9 @@ func (o *Orchestrator) Run(ctx context.Context) bool {
 	// Step 5: Apply remappings
 	updated, failed, aborted := o.ApplyRemappings(ctx, matched, unmatched)
 
-	// A shutdown during the apply phase must not report success: applyMatched
-	// breaks out of its loop on cancellation and returns aborted=false, so without
-	// this guard the terminal expression below reads failed==0 as a successful pass.
-	// Mirror the ctx re-checks after steps 1 and 2.
+	// A shutdown during apply must not report success: applyMatched returns
+	// aborted=false on cancellation, so without this guard failed==0 would
+	// read as a successful pass.
 	if ctx.Err() != nil {
 		slog.Info("run cancelled during remap phase", "cause", context.Cause(ctx))
 		return false
@@ -225,16 +214,12 @@ func (o *Orchestrator) Run(ctx context.Context) bool {
 
 	// Success when nothing failed, or when at least one update landed: a
 	// partial remap still made progress and must not flap the health marker.
-	// Deliberately NOT strict-on-failures (revisited 2026-07): per-item update
-	// failures are usually transient, and failing a pass that landed 499 of
-	// 500 updates would alert nightly on near-success; a genuinely poisoned
-	// item still surfaces once library churn settles, because it then becomes
-	// the pass's only work (failed>0, updated==0 -> failure). A tripped
-	// circuit breaker (aborted) always fails the run, even if some updates
-	// landed before it opened, because the remap phase did not run to
-	// completion. A failed recently-added clear also fails the run: the
-	// documented cleanup did not happen, and the next pass retries it
-	// (updated>0 recurs while stale entries remain).
+	// Deliberately NOT strict-on-failures: per-item failures are usually
+	// transient, and failing 499-of-500 would alert nightly on near-success;
+	// a genuinely poisoned item surfaces once it becomes the pass's only work
+	// (failed>0, updated==0). A tripped circuit breaker (aborted) always
+	// fails the run. A failed recently-added clear also fails it — the next
+	// pass retries while stale entries remain.
 	return !aborted && cleared && (failed == 0 || updated > 0)
 }
 
@@ -291,9 +276,9 @@ func logRunRefused(path string) {
 	slog.Warn("another remap pass is already running; refusing overlapping run", "lock", path)
 }
 
-// buildIndex builds the Plex library index used for matching. It returns
-// ok=false (after logging the reason) when the run must abort before matching:
-// context cancellation, any failed library section, or a completely empty index.
+// buildIndex builds the Plex library index used for matching. Returns
+// ok=false (reason logged) when the run must abort before matching: context
+// cancellation, any failed library section, or a completely empty index.
 func (o *Orchestrator) buildIndex(ctx context.Context) (remap.Index, bool) {
 	slog.Info("step 3: building Plex library index")
 	idx, failedSections := remap.BuildPlexIndex(ctx, o.plex, plexParallelism)
@@ -301,14 +286,11 @@ func (o *Orchestrator) buildIndex(ctx context.Context) (remap.Index, bool) {
 		slog.Info("run cancelled during plex indexing", "cause", context.Cause(ctx))
 		return remap.Index{}, false
 	}
-	// Abort on any failed section before the all-empty check. A partial outage
-	// yields a non-empty but incomplete index (a stale item whose correct entry
-	// lived in a failed section could false-match a same-title+year twin in a
-	// section that loaded); a total outage yields an empty index that the
-	// all-empty guard would otherwise misreport as "library is empty". Checking
-	// failedSections first makes the documented "Plex errors -> unhealthy"
-	// diagnostic fire for both cases (the scheduler counts this toward the
-	// consecutive-failure threshold).
+	// Check failedSections before the all-empty check: a partial outage
+	// yields a non-empty but incomplete index (a stale item whose correct
+	// entry lived in a failed section could false-match a same-title+year
+	// twin elsewhere), while a total outage yields an empty index the
+	// all-empty guard would otherwise misreport as "library is empty".
 	if failedSections > 0 {
 		slog.Error("aborting run: Plex returned errors for some library sections",
 			"failed_sections", failedSections)
@@ -335,11 +317,9 @@ func (o *Orchestrator) RunScheduler(ctx context.Context, setHealthy func(bool)) 
 	doRun := func() {
 		ok := o.Run(ctx)
 		if ctx.Err() != nil {
-			// Shutdown interrupted the run; not a real failure, so don't count it
-			// toward the damping threshold, flip the marker, or log a misleading
-			// "run complete"/next_run_at (deferred Cleanup removes the marker on
-			// exit). A partial run that landed updates before the signal is not a
-			// scheduled completion.
+			// Shutdown interrupted the run; don't count it toward the
+			// damping threshold or flip the marker (deferred Cleanup removes
+			// it on exit).
 			return
 		}
 		if ok {
@@ -456,11 +436,10 @@ func addHistoryPage(page *tautulli.HistoryPage, items map[string]remap.TautulliE
 
 // FindStaleKeys checks each item in the Tautulli history map against the Plex
 // API and returns only the entries whose rating keys no longer exist in Plex.
-// A non-nil error means at least one Plex check failed in a way that could not
-// be resolved (a real outage rather than a 404): the first such error cancels
-// the remaining checks and is returned so the caller aborts the run instead of
-// treating undetermined items as stale. The (possibly partial) stale map is
-// returned alongside the error for diagnostics but must not be trusted.
+// A non-nil error means at least one Plex check failed in a way that could
+// not be resolved (a real outage, not a 404); the first such error cancels
+// the remaining checks. The (possibly partial) stale map is returned
+// alongside the error for diagnostics but must not be trusted.
 func (o *Orchestrator) FindStaleKeys(ctx context.Context, items map[string]remap.TautulliEntry) (map[string]remap.TautulliEntry, error) {
 	var mu sync.Mutex
 	stale := map[string]remap.TautulliEntry{}
@@ -495,14 +474,11 @@ func (o *Orchestrator) FindStaleKeys(ctx context.Context, items map[string]remap
 }
 
 // resolveStaleShows resolves stale Show entries to their current Plex rating
-// key through one of their retained episode GUIDs, returning a map from stale
-// (grandparent) key to current key. Movies and shows without episode GUIDs
-// (e.g. legacy-agent history, which the GUID index handles) are skipped.
-// Lookups run in parallel bounded by plexParallelism. Resolution is
-// best-effort: a lookup error for one show is logged and that show falls
-// through to the index-based fallbacks, so a single failure never aborts the
-// run. A genuine Plex outage is already caught by the stale-key check and the
-// index build, both of which abort the run before this point.
+// key through one of their retained episode GUIDs. Movies and shows without
+// episode GUIDs are skipped. Resolution is best-effort: a lookup error for
+// one show falls through to the index-based fallbacks rather than aborting
+// the run; a genuine Plex outage is already caught by the stale-key check and
+// the index build.
 func (o *Orchestrator) resolveStaleShows(ctx context.Context, stale map[string]remap.TautulliEntry) map[string]string {
 	var mu sync.Mutex
 	resolved := map[string]string{}
@@ -536,9 +512,7 @@ func (o *Orchestrator) resolveStaleShows(ctx context.Context, stale map[string]r
 }
 
 // resolveOneShow tries each episode GUID in turn and returns the first show
-// rating key it resolves to, or "" if none resolve. A resolution error is
-// logged and treated as a miss for that GUID (the next is tried); the show
-// falls through to the index-based fallbacks if every GUID misses.
+// rating key it resolves to, or "" if none resolve.
 func (o *Orchestrator) resolveOneShow(ctx context.Context, episodeGUIDs []string) string {
 	for _, guid := range episodeGUIDs {
 		if ctx.Err() != nil {
@@ -559,8 +533,8 @@ func (o *Orchestrator) resolveOneShow(ctx context.Context, episodeGUIDs []string
 }
 
 // ApplyRemappings updates Tautulli metadata for each matched item and logs
-// all unmatched items. It returns the count of successfully updated records,
-// the count of failures, and whether the run was aborted by the consecutive-
+// all unmatched items. Returns the count of successfully updated records, the
+// count of failures, and whether the run was aborted by the consecutive-
 // failure circuit breaker. In dry-run mode it logs what would change without
 // writing to Tautulli.
 func (o *Orchestrator) ApplyRemappings(
@@ -627,8 +601,8 @@ func (o *Orchestrator) logRemap(m *remap.MatchResult) {
 
 // applyMatched updates Tautulli metadata for each matched item, honoring
 // dry-run mode, context cancellation, and the consecutive-failure circuit
-// breaker. It returns the counts of updated and failed records, and whether
-// the breaker tripped (aborted), which fails the run regardless of progress.
+// breaker. Returns the counts of updated and failed records, and whether the
+// breaker tripped (aborted), which fails the run regardless of progress.
 func (o *Orchestrator) applyMatched(ctx context.Context, matched []remap.MatchResult) (updated, failed int, aborted bool) {
 	breaker := newCircuitBreaker(maxConsecutiveFailures)
 	for i, m := range matched {
@@ -664,10 +638,9 @@ func (o *Orchestrator) applyMatched(ctx context.Context, matched []remap.MatchRe
 }
 
 // ClearRecentlyAdded removes all entries from Tautulli's recently-added table
-// to prevent stale entries from appearing in the UI after a remap. It is a
-// no-op in dry-run mode. It returns false when the live clear failed, so the
-// run result reflects the incomplete cleanup instead of silently reporting
-// success (the next pass retries the clear as long as updates keep landing).
+// to prevent stale entries from appearing in the UI after a remap. No-op in
+// dry-run mode. Returns false when the live clear failed, so the run result
+// reflects the incomplete cleanup rather than silently reporting success.
 func (o *Orchestrator) ClearRecentlyAdded(ctx context.Context) bool {
 	if o.cfg.DryRun {
 		slog.Info("(dry run) would clear recently added items")
