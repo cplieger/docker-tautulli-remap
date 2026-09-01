@@ -60,11 +60,7 @@ type Fallbacks struct {
 
 // matchOne applies the episode-GUID → GUID → title+year → title-only strategy
 // chain to a single stale item, returning the new Plex rating key and the
-// method string. Returns ("", "") when no strategy matched. Every strategy is
-// media-type-safe: strategy 0 (resolved) is populated only for shows, strategy
-// 1 guards on media type explicitly (Index.ByGUID is not type-keyed), and strategies
-// 2 and 3 look up keys that encode the media type (see titleYearKey/titleKey),
-// so a stale item never cross-type matches.
+// method string. Returns ("", "") when no strategy matched.
 func matchOne(
 	item *TautulliEntry,
 	oldKey string,
@@ -72,42 +68,32 @@ func matchOne(
 	idx Index,
 	fb Fallbacks,
 ) (newKey string, method MatchMethod, matchedYear string) {
-	// Strategy 0: Episode-GUID resolution (shows only). The orchestrator has
-	// already looked up one of this stale show's watched episode GUIDs in Plex
-	// and recorded the current show key; prefer that exact result over any
-	// title/year heuristic. Only shows populate resolved, and the resolver
-	// validates the key, so the newKey != oldKey guard is all that is needed to
-	// reject a no-op (unchanged-key) resolution.
+	// Strategy 0: episode-GUID resolution (shows only). The orchestrator has
+	// already resolved one of this stale show's watched episode GUIDs against
+	// Plex; prefer that exact result over any title/year heuristic.
 	if rk, ok := resolved[oldKey]; ok && rk != oldKey {
 		return rk, MethodEpisodeGUID, ""
 	}
 
-	// Strategy 1: Match by GUID. Index.ByGUID is keyed by the global, normalized GUID
-	// (not by media type), so a stale item and an index entry can share a GUID
-	// across types -- TMDB movies and TV series occupy the same tmdb://<id>
-	// namespace with no type tag. Guard on media type so a stale Movie is never
-	// remapped onto a same-id Show (or vice versa); the type-keyed title indexes
-	// below cannot catch this because the GUID index is intentionally not
-	// type-keyed.
+	// Strategy 1: match by GUID. Index.ByGUID is not type-keyed (TMDB movies
+	// and shows share the tmdb://<id> namespace), so guard media type here to
+	// avoid remapping a stale Movie onto a same-id Show or vice versa.
 	if item.GUID != "" {
 		if pe, ok := idx.ByGUID[item.GUID]; ok && pe.RatingKey != oldKey && pe.Type == item.MediaType {
 			return pe.RatingKey, MethodGUID, ""
 		}
 	}
 
-	// Strategies 2 and 3: title-based fallbacks. Both lookup keys fold in the
-	// media type (see titleYearKey/titleKey), so a match is same-type by
-	// construction and needs no separate type guard.
+	// Strategies 2-3: title-based fallbacks; their lookup keys already encode
+	// the media type, so no separate guard is needed.
 	return matchByTitle(item, oldKey, idx, fb)
 }
 
 // matchByTitle applies the title+year and (optionally) title-only fallback
-// strategies to a stale item, returning ("", "", "") when neither enabled
-// strategy matches or the item has no usable title. The lookup keys encode the
-// media type, so any match is same-type by construction. matchedYear is the
-// matched entry's release year, set only by the title-only strategy — the one
-// place it can differ from the item's own year (title+year matches are
-// same-year by construction), so callers can surface the year transition.
+// strategies, returning ("", "", "") when neither matches or the item has no
+// usable title. matchedYear is the matched entry's release year, set only by
+// the title-only strategy — the one place it can differ from the item's own
+// year.
 func matchByTitle(
 	item *TautulliEntry,
 	oldKey string,
@@ -194,11 +180,10 @@ func ProcessHistoryRow(row *HistoryItem, items map[string]TautulliEntry) bool {
 			return false
 		}
 		key := strconv.Itoa(grandparentRatingKey)
-		// An episode-scoped plex:// GUID cannot identify the show for indexing,
-		// but it is the durable handle used to resolve the show's current key
-		// later, so retain it. A legacy agent GUID (e.g. thetvdb://<id>/<s>/<e>)
-		// normalizes to a show-level id (tvdb://<id>) and serves as the show
-		// GUID directly, matching the existing GUID index.
+		// An episode-scoped plex:// GUID cannot identify the show for
+		// indexing, but is the durable handle used to resolve the show's
+		// current key later. A legacy-agent GUID normalizes to a show-level
+		// id and serves as the show GUID directly.
 		var episodeGUID, showGUID string
 		if strings.HasPrefix(guid, "plex://episode/") {
 			episodeGUID = guid
@@ -211,11 +196,10 @@ func ProcessHistoryRow(row *HistoryItem, items map[string]TautulliEntry) bool {
 }
 
 // upsertShow inserts or merges a Show entry keyed by its grandparent rating
-// key. Title and year are taken from the first row seen; a show-level GUID
-// fills a previously empty one; and distinct episode GUIDs accumulate (bounded
-// by maxEpisodeGUIDsPerShow) so resolution has several handles to try in case
-// the first-watched episode was later removed from Plex. Returns true when an
-// episode GUID was newly captured on this row.
+// key. Title and year come from the first row seen; distinct episode GUIDs
+// accumulate (bounded by maxEpisodeGUIDsPerShow) so resolution has several
+// handles to try if the first-watched episode was later removed from Plex.
+// Returns true when an episode GUID was newly captured on this row.
 func upsertShow(items map[string]TautulliEntry, key string, row *HistoryItem, year, showGUID, episodeGUID string) bool {
 	entry, exists := items[key]
 	if !exists {

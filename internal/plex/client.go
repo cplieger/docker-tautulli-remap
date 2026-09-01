@@ -23,19 +23,12 @@ type Client struct {
 }
 
 // Token is plexapi's Plex-token type, re-exported so a caller constructing a
-// client through this wrapper does not import plexapi for one conversion. An
-// alias, not a new type: it IS the library's type, and a second distinct one
-// would only add a second conversion without adding a second guarantee.
+// client through this wrapper does not import plexapi for one conversion.
 type Token = plexapi.Token
 
 // New builds the client for the given server URL and token. The library
 // validates the URL and installs the hardened transport (refuse-all
 // redirects, header-borne token, retry with Retry-After honoring).
-//
-// The token is plexapi.Token rather than a string, propagated rather than
-// converted here: this wrapper had the same adjacent-strings pair the library
-// just closed, so converting at the plexapi call would have left the
-// transposition possible one layer out.
 func New(plexURL string, token plexapi.Token) (*Client, error) {
 	api, err := plexapi.New(plexURL, token)
 	if err != nil {
@@ -45,11 +38,9 @@ func New(plexURL string, token plexapi.Token) (*Client, error) {
 }
 
 // ItemExists reports whether a Plex library item with the given rating key
-// currently exists. A non-numeric key is treated as not-exists (false, nil)
-// rather than an error, since it can never be a real key. A 200 means it
-// exists, a 404 means it definitively does not; any other failure (auth,
-// rate limit, persistent 5xx, transport) returns an error — existence could
-// NOT be determined, and callers must fail closed rather than treat the
+// currently exists. A non-numeric key is treated as not-exists (false, nil).
+// A 200 means it exists, a 404 means it definitively does not; any other
+// failure returns an error — callers must fail closed rather than treat the
 // item as stale.
 func (c *Client) ItemExists(ctx context.Context, ratingKey string) (bool, error) {
 	if !remap.RatingKey(ratingKey).IsValid() {
@@ -112,10 +103,9 @@ func (c *Client) LibraryAll(ctx context.Context, sectionKey string) ([]remap.Lib
 }
 
 // ResolveEpisodeShow resolves a Plex episode GUID (plex://episode/<hash>)
-// to the rating key of the show that currently contains it. It returns
-// ("", nil) when the GUID matches nothing or the match is ambiguous (the
-// library refuses to guess when one GUID appears under multiple shows); a
-// non-nil error means the lookup could not be completed.
+// to the rating key of the show that currently contains it. Returns ("", nil)
+// when the GUID matches nothing or is ambiguous (multiple shows); a non-nil
+// error means the lookup could not be completed.
 func (c *Client) ResolveEpisodeShow(ctx context.Context, episodeGUID string) (string, error) {
 	show, err := c.api.ShowForEpisodeGUID(ctx, episodeGUID)
 	if err != nil {

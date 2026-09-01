@@ -32,11 +32,9 @@ func main() {
 	if len(os.Args) > 1 {
 		switch os.Args[1] {
 		case "health":
-			// Scheduled mode arms a freshness deadline: the loop refreshes
-			// the marker each pass, so a marker older than 3 intervals means
-			// a wedged loop and a restart fixes it. Resident-idle mode
-			// (interval 0) disables the deadline (WithMaxAge(0) is a no-op):
-			// an idle resident between external triggers is healthy.
+			// Scheduled mode arms a freshness deadline (marker older than 3
+			// intervals means a wedged loop); resident-idle disables it
+			// (WithMaxAge(0) is a no-op) since idle is healthy there.
 			health.RunProbe(health.DefaultPath,
 				health.WithMaxAge(3*appconfig.RemapInterval()))
 		case "trigger":
@@ -80,9 +78,9 @@ func main() {
 	slog.Info("shutting down", "mode", "resident-idle", "cause", context.Cause(ctx))
 }
 
-// runTrigger executes a single remap pass and exits. This is the target for
-// external schedulers (Ofelia job-exec, cron, etc.). The os.Exit lives here,
-// free of pending defers; doTrigger holds the defers and returns a code.
+// runTrigger executes a single remap pass and exits — the target for external
+// schedulers (Ofelia job-exec, cron). os.Exit lives here, free of pending
+// defers; doTrigger holds the defers and returns a code.
 func runTrigger() {
 	os.Exit(doTrigger())
 }
@@ -99,10 +97,9 @@ func doTrigger() int {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	// NOTE: no marker.Cleanup() here. In resident-idle mode the main
-	// process owns /tmp/.healthy; this trigger runs as a separate `docker exec`
-	// against the same file, so it only updates the marker to reflect the run's
-	// outcome — deleting it would mark the resident container unhealthy.
+	// No marker.Cleanup() here: in resident-idle mode the main process owns
+	// /tmp/.healthy, and this trigger runs as a separate `docker exec` against
+	// the same file — deleting it would mark the resident container unhealthy.
 	marker := health.NewMarker(health.DefaultPath)
 
 	orch, err := buildOrchestrator(cfg)
@@ -115,29 +112,21 @@ func doTrigger() int {
 	return finishTrigger(ctx, ok, marker.Set)
 }
 
-// exitInterrupted is the trigger's exit code for a pass interrupted by
-// shutdown before completing: distinct from 0 (an interrupted pass did not
-// verifiably finish its work, so recording success would be a lie to the
-// external scheduler) and from 1 (nothing failed either — the pass is simply
-// incomplete and safe to re-run, since passes are idempotent). Exit code 2 is
-// taken by the unknown-subcommand usage error.
+// exitInterrupted is the exit code for a pass interrupted by shutdown before
+// completing: distinct from 0 (unverified success) and 1 (nothing failed;
+// the pass is simply incomplete and safe to re-run). Code 2 is the
+// unknown-subcommand usage error.
 const exitInterrupted = 3
 
 // finishTrigger records a completed trigger run's outcome and returns the
-// process exit code. It checks ctx.Err() FIRST: a graceful shutdown (parent
-// context cancelled, e.g. SIGTERM landing mid-run) means the pass did not run
-// to completion, so it logs an Info, leaves the health marker untouched, and
-// returns exitInterrupted — the retryable "incomplete, not failed" signal for
-// the external scheduler (RunScheduler.doRun treats an interrupted run the
-// same way: its own third outcome, neither success nor a counted failure).
-// Checking the context before Run's bool also makes the exit code
-// deterministic: a signal arriving during the first UpdateMetadata can
-// otherwise make Run return either true or false depending on timing. Only
-// when the context is still live does Run's bool decide the result — success
-// marks the resident process healthy and returns 0; failure leaves the marker
-// untouched (this trigger runs as a separate `docker exec` against the
-// resident process's marker, so flipping it here would misreport the resident
-// container) and signals failure via exit code 1.
+// process exit code. It checks ctx.Err() first — a signal arriving mid-run
+// can otherwise make Run's bool return either value depending on timing, so
+// checking the context first makes the exit code deterministic and reports
+// exitInterrupted (RunScheduler.doRun treats this the same way: neither
+// success nor a counted failure). Only when the context is still live does
+// Run's bool decide: success marks the resident process healthy; failure
+// leaves the marker untouched (this trigger runs as a separate `docker exec`
+// against the resident process's marker) and signals failure via exit code 1.
 func finishTrigger(ctx context.Context, ok bool, setHealthy func(bool)) int {
 	if ctx.Err() != nil {
 		slog.Info("trigger interrupted by shutdown; pass incomplete", "cause", context.Cause(ctx))
@@ -155,10 +144,10 @@ func finishTrigger(ctx context.Context, ok bool, setHealthy func(bool)) int {
 	return 0
 }
 
-// buildOrchestrator constructs the Plex, Tautulli, and Orchestrator
-// instances from cfg. The Plex client (plexapi) owns its own hardened
-// transport; Tautulli keeps the app-built one (2-minute total budget,
-// refuse-all redirects so the API key never rides a hostile 3xx).
+// buildOrchestrator constructs the Plex, Tautulli, and Orchestrator instances
+// from cfg. The Plex client (plexapi) owns its own hardened transport;
+// Tautulli keeps the app-built one (2-minute budget, refuse-all redirects so
+// the API key never rides a hostile 3xx).
 func buildOrchestrator(cfg *appconfig.Config) (*orchestrator.Orchestrator, error) {
 	plexClient, err := plex.New(cfg.PlexURL, plex.Token(cfg.PlexToken))
 	if err != nil {

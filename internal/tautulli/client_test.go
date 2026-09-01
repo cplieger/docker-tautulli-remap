@@ -22,16 +22,9 @@ func newTestClient(url, apiKey string, httpClient *http.Client) *Client {
 	return c
 }
 
-// newBubbleClient points a Client at an in-memory httptest server, for use
-// inside a synctest bubble. httptest.NewTestServer serves over a fake network
-// and registers its own shutdown with t.Cleanup, so there is no socket to dial
-// and no Close to defer; it leaves Server.URL unset and the client from
-// Server.Client() routes every request to the handler regardless of host,
-// which is why the base URL is a reserved-TLD placeholder.
-//
-// RetryDelayUnit is deliberately NOT overridden here: the bubble's synthetic
-// clock makes the production backoff cost nothing, so the retry-schedule tests
-// exercise the real 5-second base delay instead of a 1ms stand-in.
+// newBubbleClient points a Client at an in-memory httptest server for use
+// inside a synctest bubble; RetryDelayUnit stays at the production default
+// since the bubble's synthetic clock makes real backoff free.
 func newBubbleClient(t *testing.T, handler http.HandlerFunc) *Client {
 	t.Helper()
 	srv := httptest.NewTestServer(t, handler)
@@ -158,14 +151,9 @@ func TestAPI_ErrorDoesNotLeakAPIKey(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		hj, ok := w.(http.Hijacker)
 		if !ok {
-			// Unreachable: httptest's HTTP/1.1 ResponseWriter implements
-			// Hijacker (only HTTP/2, which httptest enables solely via TLS
-			// NextProtos, refuses it). This replaced a t.Skip, which runs
-			// SkipNow's runtime.Goexit on the SERVER goroutine — and a bare
-			// type assertion would be worse than either: net/http recovers
-			// handler panics and closes the conn, so the client still errors
-			// and the test would pass GREEN without anyone learning the
-			// assumption broke. t.Errorf is goroutine-safe and fails loudly.
+			// Unreachable under httptest's HTTP/1.1 ResponseWriter; t.Errorf
+			// (not t.Skip, whose Goexit would run on the server goroutine)
+			// fails loudly if this assumption ever breaks.
 			t.Errorf("httptest ResponseWriter does not implement http.Hijacker")
 			return
 		}
@@ -232,12 +220,9 @@ func TestAPIWithRetry_RetriesOnServerError(t *testing.T) {
 	})
 }
 
-// TestAPIWithRetry_Exact3Attempts pins the attempt cap and, because the
-// synctest bubble runs the PRODUCTION backoff in synthetic time, also pins the
-// invariant that used to be untestable: an exhausted retry chain at the real
-// 5-second base delay still fits inside ClientTimeout, the budget main.go
-// installs on the injected client. Under the old 1ms delay override that
-// assertion was vacuous.
+// TestAPIWithRetry_Exact3Attempts pins the attempt cap and, via the synctest
+// bubble's synthetic time, that an exhausted retry chain at the real 5-second
+// base delay still fits inside ClientTimeout.
 func TestAPIWithRetry_Exact3Attempts(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		calls := 0
@@ -340,11 +325,9 @@ func TestGetHistory_APIError(t *testing.T) {
 	}
 }
 
-// TestRetryDelayUnit pins how retryDelayUnit resolves the base retry delay: a
-// zero or negative RetryDelayUnit falls back to the package default, while a
-// positive value is returned unchanged. The retry-timing tests only exercise
-// this indirectly (and flakily), so this table covers the zero/negative/positive
-// boundary directly and deterministically.
+// TestRetryDelayUnit pins the zero/negative/positive fallback boundary
+// directly and deterministically (the retry-timing tests only exercise it
+// indirectly).
 func TestRetryDelayUnit(t *testing.T) {
 	tests := []struct {
 		name string
@@ -568,14 +551,9 @@ func TestDeleteRecentlyAdded_APIErrorPropagates(t *testing.T) {
 	}
 }
 
-// TestGetHistory_UnknownMediaTypeRowSkipped guards the fail-open wire boundary:
-// a get_history page carrying a row with an unexpected media_type ("track")
-// alongside valid movie/episode rows must decode WITHOUT error, and the
-// unknown-type row is skipped by ProcessHistoryRow while the valid rows are
-// processed. media_type decodes as a plain string, so no strict per-row type
-// validation runs at the wire boundary; when it did, the first unknown row
-// failed the entire json.Unmarshal, aborting pagination and silently zeroing
-// out the whole remap run.
+// TestGetHistory_UnknownMediaTypeRowSkipped guards the fail-open wire
+// boundary: an unknown media_type row must decode without error and be
+// skipped by ProcessHistoryRow, while valid rows in the same page still process.
 func TestGetHistory_UnknownMediaTypeRowSkipped(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Write([]byte(`{"response":{"result":"success","data":{

@@ -100,10 +100,9 @@ func (f *FlexInt) UnmarshalJSON(data []byte) error {
 // TautulliEntry represents a unique item from Tautulli history.
 //
 // Title (here and on PlexEntry / MatchResult / UnmatchResult / HistoryItem /
-// Section / LibItem) is media-server text sourced from the wild — agents,
-// filenames — so it carries the runesafe.Untrusted tag: raw bytes in for
-// matching (NormalizeTitle reads Raw()), sanitized automatically at every
-// slog emit.
+// Section / LibItem) carries the runesafe.Untrusted tag since it is
+// media-server text sourced from the wild — sanitized automatically at every
+// slog emit; NormalizeTitle reads Raw() for matching.
 type TautulliEntry struct {
 	RatingKey string
 	Title     runesafe.Untrusted
@@ -111,12 +110,11 @@ type TautulliEntry struct {
 	MediaType MediaType
 	GUID      string
 	// EpisodeGUIDs holds the stable, show-agnostic Plex episode GUIDs
-	// (plex://episode/<hash>) observed in history for a Show entry. Tautulli
-	// history stores an episode's own GUID but not its show's, so these are the
-	// only durable handle back to the show: resolving any one of them against
-	// Plex yields the show's current rating key. Empty for movies and for shows
-	// whose history predates the plex:// agent (those carry a show-level GUID in
-	// GUID instead). Deduplicated and capped at maxEpisodeGUIDsPerShow.
+	// (plex://episode/<hash>) observed in history for a Show entry — the only
+	// durable handle back to the show, since Tautulli history stores an
+	// episode's own GUID but not its show's. Empty for movies and for shows
+	// predating the plex:// agent. Deduplicated and capped at
+	// maxEpisodeGUIDsPerShow.
 	EpisodeGUIDs []string
 }
 
@@ -159,11 +157,9 @@ type HistoryItem struct {
 	Title            runesafe.Untrusted `json:"title"`
 	GrandparentTitle runesafe.Untrusted `json:"grandparent_title"`
 	GUID             string             `json:"guid"`
-	// MediaType is decoded as a plain string rather than the MediaType type so a
-	// row with an unexpected value (music "track", "clip", live TV, or a future
-	// type) does not fail the whole page decode. ProcessHistoryRow validates it
-	// via ParseMediaType and skips unknown types, keeping the wire boundary as
-	// fail-open as the processing.
+	// MediaType is decoded as a plain string rather than MediaType so a row
+	// with an unexpected value (music, clip, live TV) does not fail the whole
+	// page decode; ProcessHistoryRow validates it via ParseMediaType.
 	MediaType            string  `json:"media_type"`
 	RatingKey            FlexInt `json:"rating_key"`
 	Year                 FlexInt `json:"year"`
@@ -177,10 +173,9 @@ type GUIDMapping struct {
 	StripPath bool
 }
 
-// GUID prefix literals (see GUIDMappings for semantics). Most appear in both
-// the Source and Canonical columns of the mapping table; themoviedb:// and
-// thetvdb:// are Source-only, canonicalizing to tmdb:// and tvdb://. Hoisting
-// them into constants avoids drift when tests reference canonical prefixes.
+// GUID prefix literals (see GUIDMappings for semantics). themoviedb:// and
+// thetvdb:// are Source-only, canonicalizing to tmdb:// and tvdb://. Hoisted
+// into constants so tests referencing canonical prefixes cannot drift.
 const (
 	GUIDPrefixTheMovieDB = "themoviedb://"
 	GUIDPrefixTheTVDB    = "thetvdb://"
@@ -193,12 +188,12 @@ const (
 
 // GUIDMappings defines the known GUID prefix transformations.
 //
-// ORDER IS SIGNIFICANT. NormalizeGUID matches each Source with strings.Contains
-// (substring, not prefix) and returns on the first hit, so any Source that embeds a
-// shorter one as a substring MUST be listed first: "thetvdb://" contains "tvdb://",
-// so the StripPath=true thetvdb entry has to precede the bare tvdb entry, or legacy
-// "thetvdb://<id>/<season>/<ep>" GUIDs would resolve via tvdb and never strip to the
-// series id. Do not reorder (e.g. alphabetize) without preserving this invariant.
+// ORDER IS SIGNIFICANT. NormalizeGUID matches each Source with
+// strings.Contains and returns on the first hit, so a Source that embeds a
+// shorter one as a substring must be listed first: "thetvdb://" contains
+// "tvdb://", so the StripPath=true thetvdb entry must precede the bare tvdb
+// entry, or legacy "thetvdb://<id>/<season>/<ep>" GUIDs would resolve via tvdb
+// and never strip to the series id. Do not reorder (e.g. alphabetize).
 var GUIDMappings = [...]GUIDMapping{
 	{GUIDPrefixTheMovieDB, GUIDPrefixTMDB, false},
 	{GUIDPrefixTheTVDB, GUIDPrefixTVDB, true},

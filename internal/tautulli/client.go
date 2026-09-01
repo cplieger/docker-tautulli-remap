@@ -24,10 +24,9 @@ const resultSuccess = "success"
 const defaultRetryDelayUnit = 5 * time.Second
 
 // ClientTimeout is the total budget for one Tautulli HTTP request including
-// retries; main.go installs it on the http.Client it injects. It lives beside
-// defaultRetryDelayUnit rather than at the construction site because it has to
-// accommodate APIWithRetry's whole backoff schedule — a client timeout below
-// that schedule cuts the retry chain short and the attempt cap never applies.
+// retries; main.go installs it on the http.Client it injects. It must
+// accommodate APIWithRetry's whole backoff schedule — a lower client timeout
+// cuts the retry chain short before the attempt cap applies.
 const ClientTimeout = 2 * time.Minute
 
 // Client is the concrete Tautulli API client.
@@ -78,13 +77,11 @@ func New(tautulliURL, apiKey string, httpClient *http.Client) *Client {
 // requestURL builds the Tautulli API v2 URL for cmd with the api key and any
 // extra query params. The api key rides in the query string: httpx redacts it
 // from APIWithRetry's logs and errors, and httpx.RedactSecret strips it from
-// bare-API transport errors. cmd and apikey are applied after extra is merged,
-// so a caller-supplied extra can never override the command or the credential.
+// bare-API transport errors. cmd and apikey are applied after extra is
+// merged, so a caller-supplied extra can never override them.
 //
-// extra is deep-copied with Values.Clone rather than shallow-copied, so no
-// value slice is shared with the caller and a future params.Add cannot append
-// through into one. Clone returns nil for a nil extra (every no-param command
-// passes nil), so the map is materialized before Set writes to it.
+// extra is deep-copied via Values.Clone (nil for a nil extra) so no value
+// slice is shared with the caller.
 func (c *Client) requestURL(cmd string, extra url.Values) string {
 	params := extra.Clone()
 	if params == nil {
@@ -190,11 +187,11 @@ func (c *Client) UpdateMetadata(ctx context.Context, oldKey, newKey string, medi
 	return checkResult(body, "update_metadata_details")
 }
 
-// DeleteRecentlyAdded clears all entries from Tautulli's recently-added table.
-// Deliberately table-wide: the Tautulli API's delete_recently_added has no
-// per-item or per-key variant, so clearing everything is the only way to
-// evict the stale entries a remap leaves behind (the upstream rating-key gist
-// does the same). Tautulli repopulates the table from Plex activity.
+// DeleteRecentlyAdded clears all entries from Tautulli's recently-added
+// table. Deliberately table-wide: the API's delete_recently_added has no
+// per-item variant, so clearing everything is the only way to evict the
+// stale entries a remap leaves behind. Tautulli repopulates it from Plex
+// activity.
 func (c *Client) DeleteRecentlyAdded(ctx context.Context) error {
 	body, err := c.API(ctx, "delete_recently_added", nil)
 	if err != nil {
